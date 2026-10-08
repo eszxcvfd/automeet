@@ -222,6 +222,19 @@
       console.log('[AutoMeet] Tìm thấy nút Record, đang bấm...');
       recordItem.click();
 
+      // Chờ modal Record xuất hiện (nếu có) và tự động bấm nút Start
+      await sleep(600);
+      const startModalBtn = Array.from(document.querySelectorAll('button, div[role="button"]')).find(b => {
+        const text = (b.textContent || '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return (text === 'start' || text === 'start recording' || aria === 'start recording' || text === 'bắt đầu ghi' || text === 'bắt đầu');
+      });
+
+      if (startModalBtn) {
+        console.log('[AutoMeet] Tìm thấy nút Start trong modal Record, đang bấm...');
+        startModalBtn.click();
+      }
+
       // Âm thanh báo hiệu
       playNotificationSound();
 
