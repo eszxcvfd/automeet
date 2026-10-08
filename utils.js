@@ -82,6 +82,7 @@
     autoRecordIfInSlot: false, // TẮT TỰ ĐỘNG BẬT KHI VÀO PHÒNG
     notifyOnRecord: true,
     soundAlert: true,
+    showFloatingHud: false, // TẮT BẢNG NỔI TRÊN MÀN HÌNH THEO Ý NGƯỜI DÙNG (Dùng Popup Extension)
     schedules: [
       { id: 'morning', name: 'Ca sáng', start: '07:30', end: '11:30', enabled: false },
       { id: 'afternoon', name: 'Ca chiều', start: '13:00', end: '17:00', enabled: false },

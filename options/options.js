@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const chkAutoSlot = document.getElementById('chk-auto-slot');
   const chkNotify = document.getElementById('chk-notify');
   const chkSound = document.getElementById('chk-sound');
+  const chkShowFloatingHud = document.getElementById('chk-show-floating-hud');
 
   if (inputDisplayName) inputDisplayName.value = settings.displayName || 'Staff Member';
   if (chkEnableAutoRecord) chkEnableAutoRecord.checked = !!settings.enableAutoRecord;
@@ -23,6 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (chkAutoSlot) chkAutoSlot.checked = !!settings.autoRecordIfInSlot;
   if (chkNotify) chkNotify.checked = !!settings.notifyOnRecord;
   if (chkSound) chkSound.checked = !!settings.soundAlert;
+  if (chkShowFloatingHud) chkShowFloatingHud.checked = !!settings.showFloatingHud;
 
   // 2. Render danh sách lịch trình
   let schedules = JSON.parse(JSON.stringify(settings.schedules || []));
@@ -65,6 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       autoRecordIfInSlot: chkAutoSlot.checked,
       notifyOnRecord: chkNotify.checked,
       soundAlert: chkSound.checked,
+      showFloatingHud: chkShowFloatingHud ? chkShowFloatingHud.checked : false,
       schedules: updatedSchedules
     };
 

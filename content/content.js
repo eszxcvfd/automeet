@@ -33,7 +33,9 @@
 
     // 2. Nếu đang ở trang phòng họp
     startMeetingWatcher();
-    injectHUD();
+    if (currentSettings?.showFloatingHud) {
+      injectHUD();
+    }
     listenForMessages();
   }
 
@@ -563,7 +565,10 @@
             <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
             AutoMeet Assistant
           </div>
-          <button class="automeet-hud-minimize-btn" title="Thu nhỏ/Mở rộng">━</button>
+          <div class="automeet-hud-header-btns">
+            <button class="automeet-hud-minimize-btn" title="Thu nhỏ/Mở rộng">━</button>
+            <button class="automeet-hud-close-btn" title="Đóng bảng trợ lý này (Dùng menu extension trên thanh công cụ)">✕</button>
+          </div>
         </div>
         <div class="automeet-hud-body">
           <div class="automeet-hud-row">
@@ -593,18 +598,38 @@
 
     // Xử lý sự kiện thu nhỏ / phóng to
     const minBtn = hudElement.querySelector('.automeet-hud-minimize-btn');
-    minBtn.addEventListener('click', () => {
+    minBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
       hudElement.classList.toggle('minimized');
       minBtn.textContent = hudElement.classList.contains('minimized') ? '◻' : '━';
     });
 
+    // Xử lý đóng/tắt bảng trợ lý nổi
+    const closeBtn = hudElement.querySelector('.automeet-hud-close-btn');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        hudElement.remove();
+        hudElement = null;
+        if (utils && currentSettings) {
+          currentSettings.showFloatingHud = false;
+          await utils.saveSettings(currentSettings);
+        }
+        showToast('ℹ Đã tắt bảng trợ lý nổi. Bạn có thể Bật/Dừng Record bằng icon AutoMeet trên thanh tiện ích.');
+      });
+    }
+
     // Nút Bật Record thủ công trên HUD
-    hudElement.querySelector('#hud-btn-start').addEventListener('click', () => {
+    hudElement.querySelector('#hud-btn-start').addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
       triggerStartRecording();
     });
 
     // Nút Dừng Record thủ công trên HUD
-    hudElement.querySelector('#hud-btn-stop').addEventListener('click', () => {
+    hudElement.querySelector('#hud-btn-stop').addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
       triggerStopRecording();
     });
 
@@ -733,7 +758,14 @@
         if (utils) {
           utils.loadSettings().then(s => {
             currentSettings = s;
-            updateHUD();
+            if (currentSettings?.showFloatingHud) {
+              injectHUD();
+              updateHUD();
+            } else {
+              const existing = document.getElementById('automeet-hud-container');
+              if (existing) existing.remove();
+              hudElement = null;
+            }
           });
         }
         sendResponse({ success: true });
