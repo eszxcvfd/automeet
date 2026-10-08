@@ -15,6 +15,9 @@
   let isRecordingActive = false;
   let hudElement = null;
   let checkTimer = null;
+  let currentActiveSlotId = null;
+  let isStartingRecording = false;
+  let isStoppingRecording = false;
 
   // Khởi tạo
   init();
@@ -37,6 +40,11 @@
       injectHUD();
     }
     listenForMessages();
+
+    // 3. Khởi động kiểm tra lịch sau 3.5 giây khi vào phòng
+    setTimeout(() => {
+      checkSlotScheduleAutoRecord();
+    }, 3500);
   }
 
   /**
@@ -55,7 +63,7 @@
   }
 
   /**
-   * Giám sát liên tục trạng thái cuộc họp (pre-join, trong phòng, đang record...)
+   * Giám sát liên tục trạng thái cuộc họp (pre-join, trong phòng, tự động record theo lịch...)
    */
   function startMeetingWatcher() {
     if (checkTimer) clearInterval(checkTimer);
@@ -63,8 +71,9 @@
     checkTimer = setInterval(() => {
       handlePrejoinScreen();
       checkRecordingState();
+      checkSlotScheduleAutoRecord();
       updateHUD();
-    }, 1000);
+    }, 2000);
   }
 
   /**
@@ -111,17 +120,55 @@
   }
 
   /**
-   * Tự động kích hoạt Record nếu đang nằm trong khung giờ quy định (chỉ chạy khi được bật)
+   * Tự động kiểm tra và kích hoạt hoặc dừng record theo khung giờ lịch trình
    */
-  function checkAndAutoRecordIfInSlot() {
+  async function checkSlotScheduleAutoRecord() {
     if (!currentSettings || !currentSettings.enableAutoRecord || !currentSettings.autoRecordIfInSlot) return;
-    if (isRecordingActive) return;
+    if (isStartingRecording || isStoppingRecording) return;
+
+    // Không thao tác nếu đang ở màn hình chờ Pre-join
+    const prejoinInput = document.querySelector('input[data-testid="prejoin.nameInput"], input[placeholder*="name" i]');
+    const prejoinBtn = document.querySelector('[data-testid="prejoin.joinMeeting"], button.prejoin-btn');
+    if (prejoinInput || prejoinBtn) return;
+
+    // Đảm bảo đã vào trong cuộc họp (có giao diện họp)
+    const inMeeting = document.querySelector('#videoconference_page, #new-toolbox, .toolbox-button, #largeVideoContainer');
+    if (!inMeeting) return;
 
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings.schedules);
-    if (inSlot) {
-      console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt record...`);
-      showToast(`⏰ Đang trong khung giờ ${activeSchedule.name}, tự động kích hoạt Record...`);
-      triggerStartRecording();
+
+    if (inSlot && activeSchedule) {
+      // Đang trong khung giờ một ca làm việc
+      if (!isRecordingActive && currentActiveSlotId !== activeSchedule.id) {
+        console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt tự động Record...`);
+        currentActiveSlotId = activeSchedule.id;
+        isStartingRecording = true;
+        showToast(`⏰ Đến ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), tự động kích hoạt Record...`);
+        try {
+          await triggerStartRecording();
+        } catch (err) {
+          console.warn('[AutoMeet] Lỗi khi tự động kích hoạt Record:', err);
+        } finally {
+          isStartingRecording = false;
+        }
+      }
+    } else {
+      // Không nằm trong bất kỳ ca làm việc nào đang bật
+      if (isRecordingActive && currentActiveSlotId !== null) {
+        console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Record...`);
+        showToast(`⏰ Đã hết ca làm việc, tự động dừng Record...`);
+        isStoppingRecording = true;
+        try {
+          await triggerStopRecording();
+        } catch (err) {
+          console.warn('[AutoMeet] Lỗi khi tự động dừng Record:', err);
+        } finally {
+          isStoppingRecording = false;
+          currentActiveSlotId = null;
+        }
+      } else if (!isRecordingActive) {
+        currentActiveSlotId = null;
+      }
     }
   }
 
@@ -237,29 +284,35 @@
   /**
    * Kiểm tra menu More actions có đang mở trên màn hình không
    */
-  function findOpenMoreMenu() {
-    const menu = document.querySelector('[aria-label="More actions menu"], .popover-content');
-    return (menu && menu.offsetParent !== null) ? menu : null;
+  function isMoreActionsMenuOpen() {
+    const moreBtn = findMoreActionsButton();
+    const aria = (moreBtn?.getAttribute('aria-label') || '').toLowerCase();
+    if (aria.includes('close') || aria.includes('đóng')) return true;
+    return !!findRecordMenuItem();
   }
 
   /**
-   * Tìm mục "Record" (Ghi lại) bên trong menu More actions
-   * Hỗ trợ tìm qua SVG biểu tượng Record (vòng tròn đồng tâm) và qua aria-label/text đa ngôn ngữ
+   * Tìm mục "Record" (Ghi lại) trên toàn trang Jitsi (kể cả trong React Portal)
+   * Sử dụng vector SVG M21 12 đặc trưng của Jitsi hoặc aria-label/text
    */
-  function findRecordMenuItem(menuContainer) {
-    if (!menuContainer) return null;
-
-    // 1. Tìm theo biểu tượng SVG Record đặc trưng của Jitsi (vòng tròn tâm d*="M21 12")
-    const recSvg = menuContainer.querySelector('svg path[d*="M21 12"], svg path[d*="12 15.5a3.5"]');
+  function findRecordMenuItem() {
+    // 1. Tìm theo biểu tượng SVG Record đặc trưng của Jitsi (vòng tròn đồng tâm d*="M21 12")
+    const recSvg = document.querySelector('svg path[d*="M21 12"], svg path[d*="21 12"]');
     if (recSvg) {
-      const item = recSvg.closest('[role="button"], [role="menuitem"], .contextMenuItem, li, button');
+      const item = recSvg.closest('[role="button"], [role="menuitem"], div[class*="contextMenuItem"], li, button');
       if (item && !item.closest('#automeet-hud-container, .automeet-toast')) return item;
     }
 
-    // 2. Tìm theo aria-label hoặc nội dung text của từng item
-    const candidates = Array.from(menuContainer.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem, li, button'));
+    // 2. Tìm theo role="button" hoặc class contextMenuItem với aria-label chứa Record hoặc Ghi
+    const byAria = document.querySelector(
+      '[role="button"][aria-label="Record"], [role="button"][aria-label*="Record" i], [role="button"][aria-label*="Ghi" i], div[class*="contextMenuItem"][aria-label*="Record" i]'
+    );
+    if (byAria && !byAria.closest('#automeet-hud-container, .automeet-toast')) return byAria;
+
+    // 3. Quét các phần tử contextMenuItem trong tài liệu
+    const candidates = Array.from(document.querySelectorAll('div[class*="contextMenuItem"], [role="menuitem"], [role="button"]'));
     for (const item of candidates) {
-      if (item.closest('#automeet-hud-container, .automeet-toast')) continue;
+      if (item.closest('#automeet-hud-container, .automeet-toast, #new-toolbox')) continue;
       const text = (item.textContent || '').trim().toLowerCase();
       const aria = (item.getAttribute('aria-label') || '').toLowerCase();
 
@@ -274,7 +327,7 @@
   }
 
   /**
-   * Kích hoạt Record thủ công (hoặc theo lệnh người dùng)
+   * Kích hoạt Record (Tự động hoặc thủ công)
    */
   async function triggerStartRecording() {
     if (isRecordingActive) {
@@ -290,63 +343,40 @@
     }
 
     // Kiểm tra nếu modal Record đã mở sẵn trên màn hình
-    const existingStartBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]');
-    if (existingStartBtn && existingStartBtn.offsetParent !== null) {
-      highlightStartButton(existingStartBtn);
+    let startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]');
+    if (startBtn && startBtn.offsetParent !== null) {
+      highlightStartButton(startBtn);
       return;
     }
 
     showToast('⏳ Đang mở menu và chọn Record...');
 
     // Bước 1: Mở menu 3 chấm More actions (nếu chưa mở)
-    let moreMenu = findOpenMoreMenu();
-    if (!moreMenu) {
-      let menuOpened = false;
-
-      // Thử tối đa 3 lượt (mỗi lượt tìm nút và click bằng chuỗi Pointer/Mouse Event)
-      for (let retry = 0; retry < 3 && !menuOpened; retry++) {
-        wakeUpToolbar();
-        let moreBtn = null;
-        for (let attempt = 0; attempt < 6; attempt++) {
-          moreBtn = findMoreActionsButton();
-          if (moreBtn) break;
-          await sleep(350);
-        }
-
-        if (!moreBtn) {
-          console.warn(`[AutoMeet] Chưa tìm thấy nút 3 chấm More actions (lần thử ${retry + 1})`);
-          await sleep(500);
-          continue;
-        }
-
-        console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
-        simulateUserClick(moreBtn);
-
-        // Chờ menu More actions xuất hiện (tối đa 2s)
-        for (let attempt = 0; attempt < 8; attempt++) {
-          await sleep(250);
-          moreMenu = findOpenMoreMenu();
-          if (moreMenu) {
-            menuOpened = true;
-            break;
-          }
-        }
+    let recordItem = findRecordMenuItem();
+    if (!recordItem) {
+      wakeUpToolbar();
+      let moreBtn = null;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        moreBtn = findMoreActionsButton();
+        if (moreBtn) break;
+        await sleep(300);
       }
 
-      if (!moreMenu) {
-        console.warn('[AutoMeet] Không mở được menu More actions!');
-        showToast('⚠ Chưa mở được menu thanh công cụ. Hãy di chuột vào giữa màn hình cuộc họp và bấm lại!');
+      if (!moreBtn) {
+        console.warn('[AutoMeet] Chưa tìm thấy nút 3 chấm More actions!');
+        showToast('⚠ Chưa tìm thấy thanh công cụ Jitsi. Vui lòng di chuột vào giữa màn hình cuộc họp.');
         return;
       }
-    }
 
-    // Bước 2: Tìm chính xác mục "Record" trong menu
-    let recordItem = null;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      recordItem = findRecordMenuItem(moreMenu);
-      if (recordItem) break;
-      await sleep(250);
-      moreMenu = findOpenMoreMenu();
+      console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
+      simulateUserClick(moreBtn);
+
+      // Chờ menu xuất hiện (tối đa 2.5s)
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await sleep(250);
+        recordItem = findRecordMenuItem();
+        if (recordItem) break;
+      }
     }
 
     if (!recordItem) {
@@ -358,9 +388,8 @@
     console.log('[AutoMeet] Đang click mục Record trong menu...');
     simulateUserClick(recordItem);
 
-    // Bước 3: Chờ modal Record xuất hiện và highlight nút Start (tối đa 3.5s)
-    let startBtn = null;
-    for (let attempt = 0; attempt < 14; attempt++) {
+    // Bước 2: Chờ modal Record xuất hiện và highlight nút Start (tối đa 4s)
+    for (let attempt = 0; attempt < 16; attempt++) {
       await sleep(250);
       startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]') ||
         Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
@@ -430,9 +459,9 @@
       }
     }
 
-    // Lớp 3: Mở menu 3 chấm More actions (nếu chưa mở)
-    let moreMenu = findOpenMoreMenu();
-    if (!moreMenu) {
+    // Lớp 3: Tìm mục Dừng/Record trong menu (mở menu nếu chưa mở)
+    let stopItem = findRecordMenuItem();
+    if (!stopItem) {
       wakeUpToolbar();
       let moreBtn = null;
       for (let attempt = 0; attempt < 6; attempt++) {
@@ -447,29 +476,22 @@
 
         for (let attempt = 0; attempt < 8; attempt++) {
           await sleep(250);
-          moreMenu = findOpenMoreMenu();
-          if (moreMenu) break;
+          stopItem = findRecordMenuItem();
+          if (stopItem) break;
         }
       }
     }
 
-    // Lớp 4: Tìm mục Record / Stop recording trong menu
-    let stopItem = null;
-    if (moreMenu) {
-      const candidates = Array.from(moreMenu.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem, li, button'));
+    // Ưu tiên kiểm tra nếu có item chuyên biệt chứa từ khóa 'stop' hoặc 'dừng'
+    const stopSpecificItem = Array.from(document.querySelectorAll('div[class*="contextMenuItem"], [role="menuitem"], [role="button"]')).find(item => {
+      if (item.closest('#automeet-hud-container, .automeet-toast, #new-toolbox')) return false;
+      const text = (item.textContent || '').trim().toLowerCase();
+      const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+      return (text.includes('stop') || aria.includes('stop') || text.includes('dừng') || aria.includes('dừng')) && text.length < 35;
+    });
 
-      // Ưu tiên 1: Tìm item có chứa chữ "stop" hoặc "dừng"
-      stopItem = candidates.find(item => {
-        if (item.closest('#automeet-hud-container, .automeet-toast')) return false;
-        const text = (item.textContent || '').trim().toLowerCase();
-        const aria = (item.getAttribute('aria-label') || '').toLowerCase();
-        return (text.includes('stop') || aria.includes('stop') || text.includes('dừng') || aria.includes('dừng')) && text.length < 35;
-      });
-
-      // Ưu tiên 2: Tìm item Record (icon 2 vòng tròn SVG hoặc aria="Record" / text="Record")
-      if (!stopItem) {
-        stopItem = findRecordMenuItem(moreMenu);
-      }
+    if (stopSpecificItem) {
+      stopItem = stopSpecificItem;
     }
 
     if (stopItem) {

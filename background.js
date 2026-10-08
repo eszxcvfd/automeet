@@ -16,10 +16,18 @@ const utils = self.AutoMeetUtils;
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[AutoMeet] Extension installed / updated:', details.reason);
 
-  // Đảm bảo cài đặt mặc định được lưu
+  // Đảm bảo cấu hình tự động ghi hình được kích hoạt
   if (utils) {
-    const existing = await utils.loadSettings();
-    await utils.saveSettings(existing);
+    let settings = await utils.loadSettings();
+    const hasAnyActive = settings.schedules?.some(s => s.enabled);
+    if (!settings.enableAutoRecord || !hasAnyActive) {
+      settings.enableAutoRecord = true;
+      settings.autoRecordIfInSlot = true;
+      if (settings.schedules) {
+        settings.schedules.forEach(s => { s.enabled = true; });
+      }
+    }
+    await utils.saveSettings(settings);
   }
 
   // Khởi tạo Alarm định kỳ kiểm tra mỗi phút
@@ -31,7 +39,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       type: 'basic',
       iconUrl: 'icons/icon-48.png',
       title: 'AutoMeet đã sẵn sàng!',
-      message: `Phòng hôm nay: ${utils ? utils.getRoomName() : 'Jitsi Meet'}. Đã thiết lập lịch tự động record.`
+      message: `Phòng hôm nay: ${utils ? utils.getRoomName() : 'Jitsi Meet'}. Lịch tự động ghi hình đã được kích hoạt!`
     });
   }
 });

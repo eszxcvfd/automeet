@@ -33,6 +33,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 2. Tải và hiển thị danh sách lịch trình
   let settings = await utils.loadSettings();
+
+  // Khởi tạo công tắc tổng Tự động Record
+  const masterSwitch = document.getElementById('chk-master-auto-record');
+  if (masterSwitch) {
+    masterSwitch.checked = !!settings.enableAutoRecord;
+    masterSwitch.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      settings.enableAutoRecord = enabled;
+      settings.autoRecordIfInSlot = enabled;
+
+      // Nếu bật master mà chưa có ca nào bật, tự động bật cả 3 ca mặc định
+      if (enabled && !settings.schedules?.some(s => s.enabled)) {
+        settings.schedules?.forEach(s => { s.enabled = true; });
+      }
+
+      await utils.saveSettings(settings);
+      renderSchedules(settings.schedules);
+      updateStatus(settings);
+      notifyMeetingTabs();
+    });
+  }
+
   renderSchedules(settings.schedules);
 
   // 3. Cập nhật trạng thái từ background
@@ -96,6 +118,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   /**
+   * Đồng bộ cài đặt mới đến các tab Jitsi đang mở
+   */
+  function notifyMeetingTabs() {
+    try {
+      chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+        tabs?.forEach(t => chrome.tabs.sendMessage(t.id, { action: 'RELOAD_SETTINGS' }));
+      });
+    } catch (e) {
+      // bỏ qua lỗi
+    }
+  }
+
+  /**
    * Render danh sách các ca lịch trình
    */
   function renderSchedules(schedules) {
@@ -103,7 +138,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!container) return;
     container.innerHTML = '';
 
-    schedules.forEach((item, index) => {
+    (schedules || []).forEach((item, index) => {
       const row = document.createElement('div');
       row.className = 'schedule-item';
       row.innerHTML = `
@@ -124,8 +159,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       checkbox.addEventListener('change', async (e) => {
         const idx = parseInt(e.target.dataset.index, 10);
         settings.schedules[idx].enabled = e.target.checked;
+
+        // Nếu bật ít nhất 1 ca thì tự động kích hoạt master switch
+        const hasAnyEnabled = settings.schedules.some(s => s.enabled);
+        if (hasAnyEnabled && !settings.enableAutoRecord) {
+          settings.enableAutoRecord = true;
+          settings.autoRecordIfInSlot = true;
+          if (masterSwitch) masterSwitch.checked = true;
+        } else if (!hasAnyEnabled) {
+          settings.enableAutoRecord = false;
+          if (masterSwitch) masterSwitch.checked = false;
+        }
+
         await utils.saveSettings(settings);
         updateStatus(settings);
+        notifyMeetingTabs();
       });
     });
   }

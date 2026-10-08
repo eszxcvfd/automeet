@@ -361,7 +361,13 @@
 
   <!-- Card 2: Lịch trình Record -->
   <div class="card">
-    <div class="card-title">Lịch trình tự động</div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span class="card-title" style="margin-bottom: 0;">Lịch trình tự động</span>
+      <label class="switch" title="Bật/Tắt chế độ tự động ghi hình theo lịch">
+        <input type="checkbox" id="chk-master-auto-record">
+        <span class="slider"></span>
+      </label>
+    </div>
     <div id="schedule-list">
       <!-- Được render động từ utils.js -->
     </div>
