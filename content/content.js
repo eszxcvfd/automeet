@@ -397,62 +397,155 @@
   }
 
   /**
-   * Tự động tắt Record
+   * Tự động tắt Record (Đa tầng: Hỗ trợ Badge, Menu, Dialog xác nhận và XMPP Protocol)
    */
   async function triggerStopRecording() {
-    showToast('⏳ Đang dừng Record...');
+    showToast('⏳ Đang xử lý dừng Record...');
 
-    // Bước 1: Mở menu 3 chấm (nếu chưa mở)
+    // Lớp 1: Kiểm tra xem hộp thoại xác nhận Dừng đã mở sẵn trên màn hình chưa
+    let confirmBtn = findStopConfirmationButton();
+    if (confirmBtn) {
+      console.log('[AutoMeet] Tìm thấy nút xác nhận Dừng trên dialog đang mở, bấm xác nhận...');
+      simulateUserClick(confirmBtn);
+      finishStopRecording();
+      return;
+    }
+
+    // Lớp 2: Tìm và bấm trực tiếp vào biểu tượng Recording Indicator (REC / chấm đỏ) ở trên màn hình
+    const recIndicator = document.querySelector(
+      '[data-testid="recording-indicator"], [data-testid="recording-label"], .recording-icon, .recording-label, [aria-label*="Recording" i], [aria-label*="Đang ghi" i], [aria-label*="Ghi hình" i]'
+    );
+    if (recIndicator && !recIndicator.closest('#automeet-hud-container, .automeet-toast')) {
+      console.log('[AutoMeet] Bấm vào biểu tượng Recording Indicator trên màn hình...');
+      simulateUserClick(recIndicator);
+      await sleep(500);
+
+      confirmBtn = findStopConfirmationButton();
+      if (confirmBtn) {
+        simulateUserClick(confirmBtn);
+        finishStopRecording();
+        return;
+      }
+    }
+
+    // Lớp 3: Mở menu 3 chấm More actions (nếu chưa mở)
     let moreMenu = findOpenMoreMenu();
     if (!moreMenu) {
-      const moreBtn = findMoreActionsButton();
+      wakeUpToolbar();
+      let moreBtn = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        moreBtn = findMoreActionsButton();
+        if (moreBtn) break;
+        await sleep(350);
+      }
+
       if (moreBtn) {
+        console.log('[AutoMeet] Đang mở menu 3 chấm để tìm mục Dừng Record...');
         simulateUserClick(moreBtn);
-        for (let i = 0; i < 8; i++) {
-          await sleep(200);
+
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await sleep(250);
           moreMenu = findOpenMoreMenu();
           if (moreMenu) break;
         }
       }
     }
 
-    // Bước 2: Tìm mục Stop recording
+    // Lớp 4: Tìm mục Record / Stop recording trong menu
     let stopItem = null;
     if (moreMenu) {
-      const candidates = Array.from(moreMenu.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem'));
-      for (const item of candidates) {
-        if (item.closest('#automeet-hud-container, .automeet-toast')) continue;
+      const candidates = Array.from(moreMenu.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem, li, button'));
+
+      // Ưu tiên 1: Tìm item có chứa chữ "stop" hoặc "dừng"
+      stopItem = candidates.find(item => {
+        if (item.closest('#automeet-hud-container, .automeet-toast')) return false;
         const text = (item.textContent || '').trim().toLowerCase();
         const aria = (item.getAttribute('aria-label') || '').toLowerCase();
-        if ((text.includes('stop recording') || aria.includes('stop recording') ||
-            text.includes('dừng ghi') || aria.includes('dừng ghi')) && text.length < 30) {
-          stopItem = item;
-          break;
-        }
+        return (text.includes('stop') || aria.includes('stop') || text.includes('dừng') || aria.includes('dừng')) && text.length < 35;
+      });
+
+      // Ưu tiên 2: Tìm item Record (icon 2 vòng tròn SVG hoặc aria="Record" / text="Record")
+      if (!stopItem) {
+        stopItem = findRecordMenuItem(moreMenu);
       }
     }
 
     if (stopItem) {
+      console.log('[AutoMeet] Đang bấm mục Record/Stop recording trong menu...');
       simulateUserClick(stopItem);
-      await sleep(500);
+      await sleep(600);
 
-      // Nếu có hộp thoại xác nhận Dừng
-      const confirmBtn = document.querySelector(
-        '[data-testid="confirm-dialog-ok"], button[aria-label*="Stop" i], button[aria-label*="Dừng" i]'
-      );
-      if (confirmBtn && !confirmBtn.closest('#automeet-hud-container, .automeet-toast')) {
-        simulateUserClick(confirmBtn);
+      // Chờ hộp thoại xác nhận Dừng xuất hiện (tối đa 2.5s)
+      for (let attempt = 0; attempt < 10; attempt++) {
+        confirmBtn = findStopConfirmationButton();
+        if (confirmBtn) {
+          console.log('[AutoMeet] Phát hiện nút xác nhận Dừng, đang bấm...');
+          simulateUserClick(confirmBtn);
+          break;
+        }
+        await sleep(250);
       }
-
-      showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads).');
-    } else {
-      // Thử bấm trực tiếp vào biểu tượng Recording ở góc trên nếu có
-      const recIcon = document.querySelector('[data-testid="recording-indicator"], .recording-icon');
-      if (recIcon) {
-        simulateUserClick(recIcon);
-      }
-      showToast('⏹ Đã gửi yêu cầu dừng Record.');
     }
+
+    // Lớp 5: Thử gọi trực tiếp Jitsi internal recordingManager nếu có
+    try {
+      const rm = window.APP?.conference?._room?.recordingManager;
+      if (rm && rm._sessions) {
+        const sids = Object.keys(rm._sessions);
+        for (const sid of sids) {
+          rm.stopRecording(sid);
+        }
+      }
+    } catch (e) {
+      console.log('[AutoMeet] Gọi rm.stopRecording:', e);
+    }
+
+    finishStopRecording();
+  }
+
+  /**
+   * Tìm nút xác nhận Dừng ghi hình trong Dialog xác nhận của Jitsi
+   */
+  function findStopConfirmationButton() {
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .modal-dialog, div[aria-modal="true"]')).filter(
+      d => !d.closest('#automeet-hud-container, .automeet-toast')
+    );
+
+    for (const dialog of dialogs) {
+      const buttons = Array.from(dialog.querySelectorAll('button, [role="button"]')).filter(
+        b => !b.closest('#automeet-hud-container, .automeet-toast')
+      );
+
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
+
+        // Kiểm tra xem có phải nút Stop / Dừng không
+        const isStop = text === 'stop' || text.includes('stop') ||
+                       text === 'dừng' || text.includes('dừng') ||
+                       text.includes('xác nhận') || text === 'confirm' ||
+                       aria.includes('stop') || aria.includes('dừng') ||
+                       testid.includes('confirm') || testid.includes('stop');
+
+        // Phải chắc chắn KHÔNG PHẢI nút Hủy / Cancel / Đóng
+        const isCancel = text.includes('cancel') || text.includes('hủy') ||
+                         aria.includes('close') || aria.includes('đóng') || aria.includes('cancel') ||
+                         testid.includes('cancel');
+
+        if (isStop && !isCancel) {
+          return btn;
+        }
+      }
+    }
+    return null;
+  }
+
+  function finishStopRecording() {
+    isRecordingActive = false;
+    updateHUD();
+    playNotificationSound();
+    showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads).');
   }
 
   /**
