@@ -1,0 +1,132 @@
+/**
+ * AutoMeet - Options Script
+ * Quản lý cấu hình chi tiết, danh sách lịch trình và thông báo lưu.
+ */
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const utils = window.AutoMeetUtils;
+  if (!utils) return;
+
+  const settings = await utils.loadSettings();
+
+  // 1. Điền giá trị cài đặt chung
+  const inputDisplayName = document.getElementById('input-display-name');
+  const chkAutoJoin = document.getElementById('chk-auto-join');
+  const chkAutoSlot = document.getElementById('chk-auto-slot');
+  const chkNotify = document.getElementById('chk-notify');
+  const chkSound = document.getElementById('chk-sound');
+
+  if (inputDisplayName) inputDisplayName.value = settings.displayName || 'Auto Recorder';
+  if (chkAutoJoin) chkAutoJoin.checked = !!settings.autoJoinPrejoin;
+  if (chkAutoSlot) chkAutoSlot.checked = !!settings.autoRecordIfInSlot;
+  if (chkNotify) chkNotify.checked = !!settings.notifyOnRecord;
+  if (chkSound) chkSound.checked = !!settings.soundAlert;
+
+  // 2. Render danh sách lịch trình
+  let schedules = JSON.parse(JSON.stringify(settings.schedules || []));
+  renderTable(schedules);
+
+  // 3. Nút Thêm khung giờ mới
+  document.getElementById('btn-add-schedule')?.addEventListener('click', () => {
+    schedules.push({
+      id: 'custom_' + Date.now(),
+      name: 'Ca mới',
+      start: '08:00',
+      end: '12:00',
+      enabled: true
+    });
+    renderTable(schedules);
+  });
+
+  // 4. Nút Lưu cài đặt
+  document.getElementById('btn-save')?.addEventListener('click', async () => {
+    // Thu thập dữ liệu từ bảng lịch trình
+    const rows = document.querySelectorAll('#schedules-tbody tr');
+    const updatedSchedules = [];
+
+    rows.forEach((tr) => {
+      const id = tr.dataset.id;
+      const name = tr.querySelector('.input-sched-name').value.trim();
+      const start = tr.querySelector('.input-sched-start').value.trim();
+      const end = tr.querySelector('.input-sched-end').value.trim();
+      const enabled = tr.querySelector('.chk-sched-enabled').checked;
+
+      if (name && start && end) {
+        updatedSchedules.push({ id, name, start, end, enabled });
+      }
+    });
+
+    const newSettings = {
+      displayName: inputDisplayName.value.trim() || 'Auto Recorder',
+      autoJoinPrejoin: chkAutoJoin.checked,
+      autoRecordIfInSlot: chkAutoSlot.checked,
+      notifyOnRecord: chkNotify.checked,
+      soundAlert: chkSound.checked,
+      schedules: updatedSchedules
+    };
+
+    await utils.saveSettings(newSettings);
+    schedules = updatedSchedules;
+
+    // Gửi thông báo đến các tab Jitsi đang mở để reload settings
+    try {
+      chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+        tabs.forEach(t => chrome.tabs.sendMessage(t.id, { action: 'RELOAD_SETTINGS' }));
+      });
+    } catch (e) {
+      // bỏ qua lỗi nếu không có tab
+    }
+
+    // Hiển thị trạng thái Lưu thành công
+    const statusEl = document.getElementById('save-status');
+    if (statusEl) {
+      statusEl.classList.add('show');
+      setTimeout(() => statusEl.classList.remove('show'), 2500);
+    }
+  });
+
+  /**
+   * Render bảng danh sách lịch trình
+   */
+  function renderTable(list) {
+    const tbody = document.getElementById('schedules-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    list.forEach((item, index) => {
+      const tr = document.createElement('tr');
+      tr.dataset.id = item.id || ('sched_' + index);
+
+      tr.innerHTML = `
+        <td>
+          <input type="text" class="input-sched-name" value="${escapeAttr(item.name)}">
+        </td>
+        <td>
+          <input type="text" class="input-sched-start" value="${escapeAttr(item.start)}" placeholder="HH:mm" pattern="[0-2][0-9]:[0-5][0-9]">
+        </td>
+        <td>
+          <input type="text" class="input-sched-end" value="${escapeAttr(item.end)}" placeholder="HH:mm" pattern="[0-2][0-9]:[0-5][0-9]">
+        </td>
+        <td style="text-align: center;">
+          <input type="checkbox" class="chk-sched-enabled" ${item.enabled ? 'checked' : ''}>
+        </td>
+        <td style="text-align: center;">
+          <button type="button" class="btn-delete" title="Xóa ca này">✕</button>
+        </td>
+      `;
+
+      // Nút xóa
+      tr.querySelector('.btn-delete').addEventListener('click', () => {
+        schedules.splice(index, 1);
+        renderTable(schedules);
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function escapeAttr(str) {
+    if (!str) return '';
+    return String(str).replace(/"/g, '&quot;');
+  }
+});

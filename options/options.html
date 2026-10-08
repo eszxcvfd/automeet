@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cài đặt AutoMeet Jitsi Controller</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 24px;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .header img {
+      width: 36px;
+      height: 36px;
+    }
+
+    .header-text h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+
+    .header-text p {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    /* Cards */
+    .card {
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f1f5f9;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Form items */
+    .form-group {
+      margin-bottom: 14px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+    }
+
+    .form-desc {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+
+    input[type="text"], input[type="time"] {
+      width: 100%;
+      background: #090d16;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: #ffffff;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus, input[type="time"]:focus {
+      border-color: #38bdf8;
+    }
+
+    /* Checkbox option row */
+    .checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 0;
+      cursor: pointer;
+    }
+
+    .checkbox-row input[type="checkbox"] {
+      margin-top: 3px;
+      width: 16px;
+      height: 16px;
+      accent-color: #2563eb;
+      cursor: pointer;
+    }
+
+    .checkbox-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: #e2e8f0;
+    }
+
+    /* Table for schedules */
+    .table-container {
+      overflow-x: auto;
+      margin-bottom: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      background: #090d16;
+      color: #94a3b8;
+      font-weight: 600;
+      border-bottom: 1px solid #334155;
+    }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      vertical-align: middle;
+    }
+
+    td input[type="text"], td input[type="time"] {
+      padding: 6px 8px;
+    }
+
+    .btn-delete {
+      background: transparent;
+      border: none;
+      color: #ef4444;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      transition: background 0.2s;
+    }
+
+    .btn-delete:hover {
+      background: rgba(239, 68, 68, 0.15);
+    }
+
+    .btn-add {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px dashed #475569;
+      color: #38bdf8;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-add:hover {
+      background: rgba(56, 189, 248, 0.1);
+      border-color: #38bdf8;
+    }
+
+    /* Info Callout */
+    .callout {
+      background: rgba(37, 99, 235, 0.1);
+      border-left: 4px solid #3b82f6;
+      border-radius: 0 8px 8px 0;
+      padding: 12px 16px;
+      font-size: 12px;
+      color: #bfdbfe;
+      margin-top: 14px;
+      line-height: 1.6;
+    }
+
+    .callout code {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #93c5fd;
+    }
+
+    /* Save button bar */
+    .save-bar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .btn-save {
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-save:hover {
+      background: #1d4ed8;
+    }
+
+    .save-status {
+      font-size: 13px;
+      color: #4ade80;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .save-status.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <img src="../icons/icon-48.png" alt="Logo">
+      <div class="header-text">
+        <h1>AutoMeet Controller - Cài đặt</h1>
+        <p>Cấu hình lịch trình tự động vào phòng Jitsi Meet và bật/tắt ghi hình cục bộ.</p>
+      </div>
+    </div>
+
+    <!-- Cài đặt chung -->
+    <div class="card">
+      <h2>⚙ Cài đặt chung</h2>
+      <div class="form-group">
+        <label for="input-display-name">Tên hiển thị khi vào phòng Meet:</label>
+        <input type="text" id="input-display-name" placeholder="Ví dụ: Auto Recorder">
+        <div class="form-desc">Tên này sẽ tự động được điền vào ô Display Name tại màn hình Pre-join của Jitsi.</div>
+      </div>
+
+      <div class="form-group" style="margin-top: 16px;">
+        <label class="checkbox-row">
+          <input type="checkbox" id="chk-auto-join">
+          <div>
+            <div class="checkbox-label">Tự động bấm "Join meeting" tại màn hình Pre-join</div>
+            <div class="form-desc">Bỏ qua màn hình chờ để vào phòng họp ngay khi trang vừa tải xong.</div>
+          </div>
+        </label>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="chk-auto-slot">
+          <div>
+            <div class="checkbox-label">Tự động kích hoạt Record nếu mở phòng trong khung giờ ca trực</div>
+            <div class="form-desc">Nếu bạn mở trình duyệt hoặc vào phòng lúc 08:00 (trong ca sáng 07:30 - 11:30), hệ thống sẽ tự động bật record ngay.</div>
+          </div>
+        </label>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="chk-notify">
+          <div>
+            <div class="checkbox-label">Bật thông báo hệ thống khi Bật/Tắt Record</div>
+            <div class="form-desc">Gửi Notification thông báo trên máy tính khi ca ghi hình bắt đầu hoặc kết thúc.</div>
+          </div>
+        </label>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="chk-sound">
+          <div>
+            <div class="checkbox-label">Âm thanh chuông báo hiệu khi bắt đầu Record</div>
+            <div class="form-desc">Phát âm thanh nhẹ nhàng để bạn biết buổi ghi hình đã bắt đầu.</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Quản lý lịch trình -->
+    <div class="card">
+      <h2>📅 Quản lý các khung giờ Record</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 25%;">Tên ca</th>
+              <th style="width: 25%;">Giờ bật record</th>
+              <th style="width: 25%;">Giờ tắt record</th>
+              <th style="width: 15%; text-align: center;">Kích hoạt</th>
+              <th style="width: 10%; text-align: center;">Xóa</th>
+            </tr>
+          </thead>
+          <tbody id="schedules-tbody">
+            <!-- Render động bằng JS -->
+          </tbody>
+        </table>
+      </div>
+
+      <button type="button" class="btn-add" id="btn-add-schedule">+ Thêm khung giờ mới</button>
+
+      <div class="callout">
+        <strong>💡 Lưu ý về khung giờ đêm:</strong><br>
+        Để tắt record lúc nửa đêm (24h00), hãy nhập giá trị <code>24:00</code> (hoặc <code>00:00</code>). Hệ thống tự động hiểu và tính toán dừng record chính xác vào khoảnh khắc giao thừa giữa 2 ngày.
+      </div>
+    </div>
+
+    <!-- Hướng dẫn chạy tự động 100% -->
+    <div class="card">
+      <h2>🚀 Hướng dẫn chế độ tự động 100% (Không cần bấm nút "Allow")</h2>
+      <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 10px;">
+        Khi Jitsi Meet kích hoạt ghi hình cục bộ (Local Recording), trình duyệt Chrome theo chính sách bảo mật sẽ hiển thị hộp thoại: <em>"Allow meet.jit.si to see this tab?"</em> (như ảnh 2 bạn đã gửi).
+      </p>
+      <div class="callout" style="background: rgba(16, 185, 129, 0.1); border-left-color: #10b981; color: #a7f3d0;">
+        <strong>Giải pháp 1-Click tự động hóa hoàn toàn:</strong><br>
+        Bạn chỉ cần khởi chạy Chrome bằng phím tắt / lệnh có kèm 2 cờ bảo mật sau:<br>
+        <code>google-chrome --auto-select-desktop-capture-source="Jitsi Meet" --use-fake-ui-for-media-stream</code><br><br>
+        Khi chạy cờ này, Chrome sẽ <strong>tự động chọn tab Jitsi và tự động bấm Allow ngay lập tức</strong> mà không cần người trực máy! File script chạy sẵn được đính kèm trong thư mục <code>scripts/</code> của Extension.
+      </div>
+    </div>
+
+    <!-- Save bar -->
+    <div class="save-bar">
+      <span class="save-status" id="save-status">✓ Đã lưu cài đặt thành công!</span>
+      <button type="button" class="btn-save" id="btn-save">Lưu Cài Đặt</button>
+    </div>
+  </div>
+
+  <script src="../utils.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

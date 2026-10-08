@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "AutoMeet Jitsi Controller & Recorder",
+  "version": "1.0.0",
+  "description": "Tự động tạo phòng Jitsi Meet theo định dạng Staff{Năm}W{Tuần}T{Thứ} và tự động điều khiển Bật/Tắt Record theo lịch trình.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "AutoMeet Controller",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.jit.si/*"
+      ],
+      "js": [
+        "utils.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://meet.jit.si/*"
+  ]
+}
