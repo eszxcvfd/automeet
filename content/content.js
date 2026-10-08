@@ -35,11 +35,6 @@
     startMeetingWatcher();
     injectHUD();
     listenForMessages();
-
-    // 3. Kiểm tra tự động record nếu đang trong khung giờ
-    setTimeout(() => {
-      checkAndAutoRecordIfInSlot();
-    }, 4000);
   }
 
   /**
@@ -129,33 +124,54 @@
   }
 
   /**
-   * Tìm nút "..." (More actions / Thao tác khác)
+   * Đánh thức thanh công cụ (Toolbar) nếu đang bị ẩn do không di chuột
+   */
+  function wakeUpToolbar() {
+    try {
+      const evt = new MouseEvent('mousemove', {
+        bubbles: true,
+        cancelable: true,
+        clientX: window.innerWidth / 2,
+        clientY: window.innerHeight - 50
+      });
+      document.body.dispatchEvent(evt);
+      const container = document.querySelector('#videoconference_page, #largeVideoContainer, .filmstrip, .toolbox-content');
+      if (container) container.dispatchEvent(evt);
+    } catch (e) {
+      // bỏ qua nếu lỗi event
+    }
+  }
+
+  /**
+   * Tìm nút "..." (More actions / Thao tác khác) - Hỗ trợ cả thẻ DIV và BUTTON
    */
   function findMoreActionsButton() {
-    // 1. Thử theo aria-label và data-testid phổ biến
+    wakeUpToolbar();
+
+    // 1. Tìm bằng selector bao gồm cả DIV và BUTTON
     const selectors = [
-      'button[aria-label="More actions"]',
-      'button[aria-label*="More actions" i]',
-      'button[aria-label*="Thao tác khác" i]',
-      'button#more-actions-menu-button',
+      '[aria-label="More actions"]',
+      '[aria-label*="More actions" i]',
+      '[aria-label*="Thao tác khác" i]',
       '[data-testid="overflow-menu-button"]',
-      'div[aria-label="More actions"]',
-      'div[aria-label*="Thao tác khác" i]'
+      '#more-actions-menu-button',
+      '.toolbox-button[aria-label*="More" i]'
     ];
 
     for (const sel of selectors) {
-      const btn = document.querySelector(sel);
-      if (btn && btn.offsetParent !== null) return btn;
+      const el = document.querySelector(sel);
+      if (el) return el;
     }
 
     // 2. Tìm theo icon SVG 3 chấm trong thanh toolbar
-    const buttons = document.querySelectorAll('div[role="toolbar"] button, .toolbox-content button');
+    const buttons = document.querySelectorAll(
+      'div[role="toolbar"] [role="button"], .toolbox-content [role="button"], div[role="toolbar"] button, .toolbox-content button, .toolbox-button'
+    );
     for (const b of buttons) {
       const aria = (b.getAttribute('aria-label') || '').toLowerCase();
       if (aria.includes('more') || aria.includes('thao tác') || aria.includes('overflow')) {
         return b;
       }
-      // Nút có 3 dấu chấm tròn SVG
       if (b.querySelector('svg circle') && b.querySelectorAll('svg circle').length >= 3) {
         return b;
       }
@@ -165,7 +181,7 @@
   }
 
   /**
-   * Tự động bật Record (Khớp với 2 ảnh đính kèm của người dùng)
+   * Kích hoạt Record thủ công (hoặc theo lệnh người dùng)
    */
   async function triggerStartRecording() {
     if (isRecordingActive) {
@@ -173,53 +189,59 @@
       return;
     }
 
-    showToast('⏳ Đang mở menu để bật Record...');
-
-    // Bước 1: Mở menu 3 chấm (Ảnh 1)
-    const moreBtn = findMoreActionsButton();
-    if (!moreBtn) {
-      console.warn('[AutoMeet] Không tìm thấy nút 3 chấm More actions!');
-      showToast('⚠ Chưa tìm thấy thanh công cụ Jitsi. Vui lòng đảm bảo đã vào phòng.');
+    // Kiểm tra nếu đang ở màn hình chờ Pre-join hoặc chờ Moderator
+    const isPrejoin = document.querySelector('[data-testid="prejoin.joinMeeting"], .prejoin-input-area, input[placeholder*="name" i]');
+    if (isPrejoin) {
+      showToast('⚠ Bạn đang ở màn hình chờ. Vui lòng bấm Tham gia cuộc họp trước.');
       return;
     }
 
+    showToast('⏳ Đang chuẩn bị mở menu Record...');
+
+    // Retry tìm nút More actions tối đa 5 lần (mỗi lần 800ms) để đợi giao diện Jitsi render
+    let moreBtn = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      moreBtn = findMoreActionsButton();
+      if (moreBtn) break;
+      await sleep(800);
+    }
+
+    if (!moreBtn) {
+      console.warn('[AutoMeet] Chưa tìm thấy thanh công cụ Jitsi. Vui lòng đảm bảo bạn đã vào hẳn trong phòng họp.');
+      showToast('⚠ Chưa tìm thấy thanh công cụ. Hãy đảm bảo bạn đã vào hẳn trong phòng họp.');
+      return;
+    }
+
+    // Click mở menu 3 chấm
     moreBtn.click();
     await sleep(600);
 
-    // Bước 2: Tìm mục Record trong menu vừa bật lên (Ảnh 1)
-    const menuItems = Array.from(document.querySelectorAll(
-      '.overflow-menu-item, li[role="menuitem"], div[role="menuitem"], .toolbox-button'
-    ));
-
+    // Tìm mục Record trong menu vừa bật lên (hỗ trợ cả thẻ div role="menuitem", li, button)
     let recordItem = null;
-    for (const item of menuItems) {
-      const text = (item.textContent || '').trim().toLowerCase();
-      const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const menuItems = Array.from(document.querySelectorAll(
+        '[role="menuitem"], .overflow-menu-item, .toolbox-button, li[role="menuitem"], button, div'
+      ));
 
-      // Kiểm tra từ khóa "record" hoặc "ghi lại"
-      if (text === 'record' || aria === 'record' || text.includes('record') || aria.includes('record') ||
-          text.includes('ghi lại') || aria.includes('ghi lại')) {
-        // Đảm bảo không phải là stop recording
-        if (!text.includes('stop') && !aria.includes('stop')) {
-          recordItem = item;
-          break;
+      for (const item of menuItems) {
+        const text = (item.textContent || '').trim().toLowerCase();
+        const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+
+        // Kiểm tra từ khóa "record" hoặc "ghi lại"
+        if (text === 'record' || aria === 'record' || text.includes('record') || aria.includes('record') ||
+            text.includes('ghi lại') || aria.includes('ghi lại')) {
+          if (!text.includes('stop') && !aria.includes('stop')) {
+            recordItem = item;
+            break;
+          }
         }
       }
-    }
-
-    if (!recordItem) {
-      // Tìm bằng cách duyệt tất cả span/div trong menu
-      const allSpans = Array.from(document.querySelectorAll('.overflow-menu span, div[role="menu"] span'));
-      for (const s of allSpans) {
-        if (s.textContent && s.textContent.trim().toLowerCase() === 'record') {
-          recordItem = s.closest('[role="menuitem"]') || s.parentElement;
-          break;
-        }
-      }
+      if (recordItem) break;
+      await sleep(300);
     }
 
     if (recordItem) {
-      console.log('[AutoMeet] Tìm thấy nút Record, đang bấm...');
+      console.log('[AutoMeet] Tìm thấy mục Record, đang bấm...');
       recordItem.click();
 
       // Chờ modal Record xuất hiện (nếu có) và tự động bấm nút Start
