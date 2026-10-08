@@ -141,6 +141,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const slotInfo = utils.checkCurrentSlot(curSettings?.schedules);
     const nextEvt = utils.getNextEvent(curSettings?.schedules);
 
+    if (!curSettings?.enableAutoRecord) {
+      if (badgeLabel) badgeLabel.textContent = 'Thủ công';
+      if (badgeDot) badgeDot.className = 'dot-idle';
+      if (nextEventEl) nextEventEl.textContent = 'Tự động Record: ĐÃ TẮT (Chỉ Record khi bấm nút)';
+      return;
+    }
+
     if (slotInfo.inSlot) {
       if (badgeLabel) badgeLabel.textContent = slotInfo.activeSchedule.name;
       if (badgeDot) badgeDot.className = 'dot-rec';

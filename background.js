@@ -67,7 +67,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMins).padStart(2, '0')}`;
 
   const settings = utils ? await utils.loadSettings() : null;
-  if (!settings || !settings.schedules) return;
+  if (!settings || !settings.enableAutoRecord || !settings.schedules) return;
 
   for (const item of settings.schedules) {
     if (!item.enabled) continue;

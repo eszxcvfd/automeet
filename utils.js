@@ -73,18 +73,19 @@
   }
 
   /**
-   * Cấu hình mặc định cho Extension
+   * Cấu hình mặc định cho Extension (Đã tắt tự động record theo yêu cầu)
    */
   const DEFAULT_SETTINGS = {
-    displayName: 'Auto Recorder',
+    displayName: 'Staff Member',
     autoJoinPrejoin: true,
-    autoRecordIfInSlot: true,
+    enableAutoRecord: false, // TẮT TỰ ĐỘNG RECORD
+    autoRecordIfInSlot: false, // TẮT TỰ ĐỘNG BẬT KHI VÀO PHÒNG
     notifyOnRecord: true,
     soundAlert: true,
     schedules: [
-      { id: 'morning', name: 'Ca sáng', start: '07:30', end: '11:30', enabled: true },
-      { id: 'afternoon', name: 'Ca chiều', start: '13:00', end: '17:00', enabled: true },
-      { id: 'evening', name: 'Ca tối', start: '22:00', end: '24:00', enabled: true }
+      { id: 'morning', name: 'Ca sáng', start: '07:30', end: '11:30', enabled: false },
+      { id: 'afternoon', name: 'Ca chiều', start: '13:00', end: '17:00', enabled: false },
+      { id: 'evening', name: 'Ca tối', start: '22:00', end: '24:00', enabled: false }
     ]
   };
 

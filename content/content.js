@@ -114,10 +114,10 @@
   }
 
   /**
-   * Tự động kích hoạt Record nếu đang nằm trong khung giờ quy định
+   * Tự động kích hoạt Record nếu đang nằm trong khung giờ quy định (chỉ chạy khi được bật)
    */
   function checkAndAutoRecordIfInSlot() {
-    if (!currentSettings || !currentSettings.autoRecordIfInSlot) return;
+    if (!currentSettings || !currentSettings.enableAutoRecord || !currentSettings.autoRecordIfInSlot) return;
     if (isRecordingActive) return;
 
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings.schedules);
@@ -376,20 +376,26 @@
         statusPill.className = 'automeet-status-pill waiting';
       }
       if (statusText) {
-        statusText.textContent = inSlot ? `Sẵn sàng (${activeSchedule?.name})` : 'Đang chờ ca';
+        statusText.textContent = currentSettings?.enableAutoRecord
+          ? (inSlot ? `Sẵn sàng (${activeSchedule?.name})` : 'Đang chờ ca')
+          : 'Sẵn sàng (Thủ công)';
       }
     }
 
     if (schedText) {
-      const nextEvt = utils.getNextEvent(currentSettings?.schedules);
-      if (nextEvt) {
-        const action = nextEvt.type === 'start' ? 'Bật' : 'Tắt';
-        const hours = Math.floor(nextEvt.minutesLeft / 60);
-        const mins = nextEvt.minutesLeft % 60;
-        const timeRemaining = hours > 0 ? `${hours}h ${mins}p` : `${mins} phút`;
-        schedText.textContent = `${action} lúc ${nextEvt.timeStr} (sau ${timeRemaining})`;
+      if (!currentSettings?.enableAutoRecord) {
+        schedText.textContent = 'Ghi hình thủ công (Tự động: TẮT)';
       } else {
-        schedText.textContent = 'Chưa đặt lịch';
+        const nextEvt = utils.getNextEvent(currentSettings?.schedules);
+        if (nextEvt) {
+          const action = nextEvt.type === 'start' ? 'Bật' : 'Tắt';
+          const hours = Math.floor(nextEvt.minutesLeft / 60);
+          const mins = nextEvt.minutesLeft % 60;
+          const timeRemaining = hours > 0 ? `${hours}h ${mins}p` : `${mins} phút`;
+          schedText.textContent = `${action} lúc ${nextEvt.timeStr} (sau ${timeRemaining})`;
+        } else {
+          schedText.textContent = 'Chưa đặt lịch';
+        }
       }
     }
   }

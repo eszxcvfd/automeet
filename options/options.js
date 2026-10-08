@@ -11,12 +11,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 1. Điền giá trị cài đặt chung
   const inputDisplayName = document.getElementById('input-display-name');
+  const chkEnableAutoRecord = document.getElementById('chk-enable-auto-record');
   const chkAutoJoin = document.getElementById('chk-auto-join');
   const chkAutoSlot = document.getElementById('chk-auto-slot');
   const chkNotify = document.getElementById('chk-notify');
   const chkSound = document.getElementById('chk-sound');
 
-  if (inputDisplayName) inputDisplayName.value = settings.displayName || 'Auto Recorder';
+  if (inputDisplayName) inputDisplayName.value = settings.displayName || 'Staff Member';
+  if (chkEnableAutoRecord) chkEnableAutoRecord.checked = !!settings.enableAutoRecord;
   if (chkAutoJoin) chkAutoJoin.checked = !!settings.autoJoinPrejoin;
   if (chkAutoSlot) chkAutoSlot.checked = !!settings.autoRecordIfInSlot;
   if (chkNotify) chkNotify.checked = !!settings.notifyOnRecord;
@@ -57,7 +59,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     const newSettings = {
-      displayName: inputDisplayName.value.trim() || 'Auto Recorder',
+      displayName: inputDisplayName.value.trim() || 'Staff Member',
+      enableAutoRecord: chkEnableAutoRecord.checked,
       autoJoinPrejoin: chkAutoJoin.checked,
       autoRecordIfInSlot: chkAutoSlot.checked,
       notifyOnRecord: chkNotify.checked,
