@@ -244,24 +244,38 @@
       console.log('[AutoMeet] Tìm thấy mục Record, đang bấm...');
       recordItem.click();
 
-      // Chờ modal Record xuất hiện (nếu có) và tự động bấm nút Start
-      await sleep(600);
-      const startModalBtn = Array.from(document.querySelectorAll('button, div[role="button"]')).find(b => {
-        const text = (b.textContent || '').trim().toLowerCase();
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-        return (text === 'start' || text === 'start recording' || aria === 'start recording' || text === 'bắt đầu ghi' || text === 'bắt đầu');
-      });
-
-      if (startModalBtn) {
-        console.log('[AutoMeet] Tìm thấy nút Start trong modal Record, đang bấm...');
-        startModalBtn.click();
+      // Chờ modal Record xuất hiện (tối đa 3s) và làm nổi bật nút Start để người dùng bấm
+      let startModalBtn = null;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await sleep(300);
+        startModalBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]') ||
+          Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button, button')).find(b => {
+            const text = (b.textContent || '').trim().toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return text === 'start' || text.includes('start recording') || aria.includes('start recording') || text === 'bắt đầu ghi';
+          });
+        if (startModalBtn) break;
       }
 
-      // Âm thanh báo hiệu
-      playNotificationSound();
+      if (startModalBtn) {
+        // Làm nổi bật nút Start bằng viền sáng xanh neon để người dùng nhận diện ngay
+        startModalBtn.style.outline = '4px solid #38bdf8';
+        startModalBtn.style.boxShadow = '0 0 30px rgba(56, 189, 248, 1)';
+        startModalBtn.style.transform = 'scale(1.05)';
+        startModalBtn.style.transition = 'all 0.3s ease';
+        startModalBtn.focus();
 
-      // Thông báo hiển thị nhắc người dùng bấm Allow (Ảnh 2)
-      showToast('🎥 ĐÃ BẤM RECORD! Nếu trình duyệt hiện popup hỏi cấp quyền tab, hãy bấm ALLOW.');
+        // Lắng nghe khi người dùng bấm nút Start thật
+        startModalBtn.addEventListener('click', () => {
+          showToast('📁 Trình duyệt đang mở cửa sổ... Hãy chọn nơi lưu file và bấm Cho phép (Allow) để bắt đầu!');
+        }, { once: true });
+
+        playNotificationSound();
+        showToast('👉 Bấm nút START màu xanh ở giữa màn hình để mở cửa sổ chọn nơi lưu & cấp quyền trình duyệt!');
+      } else {
+        playNotificationSound();
+        showToast('👉 Vui lòng bấm nút Start trong bảng Record để bắt đầu ghi hình!');
+      }
     } else {
       console.warn('[AutoMeet] Không tìm thấy mục Record trong menu!');
       showToast('⚠ Không tìm thấy mục "Record" trong danh sách menu!');
