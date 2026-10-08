@@ -143,15 +143,82 @@
   }
 
   /**
+   * Giả lập thao tác click chuột đầy đủ (pointerdown -> mousedown -> pointerup -> mouseup -> click)
+   * Giúp tương thích 100% với cơ chế Event Delegation của React 18 / Jitsi Meet
+   */
+  function simulateUserClick(element) {
+    if (!element) return false;
+    try {
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+      element.focus();
+
+      const rect = element.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+
+      const eventInit = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        detail: 1,
+        clientX: clientX,
+        clientY: clientY,
+        button: 0,
+        buttons: 1
+      };
+
+      const target = element.querySelector('svg, .toolbox-icon') || element;
+      target.dispatchEvent(new PointerEvent('pointerdown', eventInit));
+      target.dispatchEvent(new MouseEvent('mousedown', eventInit));
+      target.dispatchEvent(new PointerEvent('pointerup', eventInit));
+      target.dispatchEvent(new MouseEvent('mouseup', eventInit));
+      target.dispatchEvent(new MouseEvent('click', eventInit));
+      if (typeof element.click === 'function') {
+        element.click();
+      }
+      return true;
+    } catch (e) {
+      if (typeof element.click === 'function') element.click();
+      return true;
+    }
+  }
+
+  /**
    * Tìm nút "..." (More actions / Thao tác khác) trên thanh toolbar Jitsi
+   * Sử dụng kết hợp CSS class đặc trưng, vector SVG 3 chấm, vị trí cạnh nút Rời phòng (Hangup), và aria-label đa ngôn ngữ
    */
   function findMoreActionsButton() {
     wakeUpToolbar();
 
+    // 1. Tìm theo class container đặc trưng của nút 3 chấm trong Jitsi Meet
+    let btn = document.querySelector('.toolbox-button-wth-dialog .toolbox-button, .context-menu .toolbox-button');
+    if (btn && !btn.closest('#automeet-hud-container, .automeet-toast')) return btn;
+
+    // 2. Tìm theo vector path SVG của 3 dấu chấm tròn ngang (M16.5 12)
+    const svgPath = document.querySelector('svg path[d*="M16.5 12"], svg path[d*="16.5 12"]');
+    btn = svgPath?.closest('[role="button"], .toolbox-button, button');
+    if (btn && !btn.closest('#automeet-hud-container, .automeet-toast')) return btn;
+
+    // 3. Tìm theo vị trí: Nút 3 chấm luôn nằm ngay liền kề trước nút gác máy màu đỏ (Leave/Hangup)
+    const leaveBtn = document.querySelector(
+      '[aria-label*="Leave" i], [aria-label*="Rời" i], .hangup-button, [data-testid="hangup-button"]'
+    );
+    if (leaveBtn) {
+      const candidate = leaveBtn.closest('.toolbox-content-items, .new-toolbox, div')?.querySelector('.toolbox-button-wth-dialog .toolbox-button') ||
+        leaveBtn.parentElement?.previousElementSibling?.querySelector('[role="button"]') ||
+        leaveBtn.previousElementSibling?.querySelector('[role="button"]');
+      if (candidate && !candidate.closest('#automeet-hud-container, .automeet-toast')) return candidate;
+    }
+
+    // 4. Tìm theo các nhãn aria-label hỗ trợ cả tiếng Anh và tiếng Việt
     const selectors = [
       '[aria-label="More actions"]',
       '[aria-label*="More actions" i]',
+      '[aria-label*="Close more actions" i]',
+      '[aria-label*="Thêm hành động" i]',
       '[aria-label*="Thao tác khác" i]',
+      '[aria-label*="Tùy chọn khác" i]',
+      '[aria-label*="Hành động khác" i]',
       '[data-testid="overflow-menu-button"]',
       '#more-actions-menu-button',
       '.toolbox-button[aria-label*="More" i]'
@@ -160,20 +227,6 @@
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (el && !el.closest('#automeet-hud-container, .automeet-toast')) return el;
-    }
-
-    const buttons = document.querySelectorAll(
-      'div[role="toolbar"] [role="button"], .toolbox-content [role="button"], div[role="toolbar"] button, .toolbox-content button, .toolbox-button'
-    );
-    for (const b of buttons) {
-      if (b.closest('#automeet-hud-container, .automeet-toast')) continue;
-      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (aria.includes('more') || aria.includes('thao tác') || aria.includes('overflow')) {
-        return b;
-      }
-      if (b.querySelector('svg circle') && b.querySelectorAll('svg circle').length >= 3) {
-        return b;
-      }
     }
 
     return null;
@@ -185,6 +238,37 @@
   function findOpenMoreMenu() {
     const menu = document.querySelector('[aria-label="More actions menu"], .popover-content');
     return (menu && menu.offsetParent !== null) ? menu : null;
+  }
+
+  /**
+   * Tìm mục "Record" (Ghi lại) bên trong menu More actions
+   * Hỗ trợ tìm qua SVG biểu tượng Record (vòng tròn đồng tâm) và qua aria-label/text đa ngôn ngữ
+   */
+  function findRecordMenuItem(menuContainer) {
+    if (!menuContainer) return null;
+
+    // 1. Tìm theo biểu tượng SVG Record đặc trưng của Jitsi (vòng tròn tâm d*="M21 12")
+    const recSvg = menuContainer.querySelector('svg path[d*="M21 12"], svg path[d*="12 15.5a3.5"]');
+    if (recSvg) {
+      const item = recSvg.closest('[role="button"], [role="menuitem"], .contextMenuItem, li, button');
+      if (item && !item.closest('#automeet-hud-container, .automeet-toast')) return item;
+    }
+
+    // 2. Tìm theo aria-label hoặc nội dung text của từng item
+    const candidates = Array.from(menuContainer.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem, li, button'));
+    for (const item of candidates) {
+      if (item.closest('#automeet-hud-container, .automeet-toast')) continue;
+      const text = (item.textContent || '').trim().toLowerCase();
+      const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+
+      if (aria === 'record' || text === 'record' ||
+          aria.includes('ghi') || text.includes('ghi') ||
+          (text.includes('record') && !text.includes('stop') && text.length < 25)) {
+        return item;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -215,54 +299,52 @@
     // Bước 1: Mở menu 3 chấm More actions (nếu chưa mở)
     let moreMenu = findOpenMoreMenu();
     if (!moreMenu) {
-      wakeUpToolbar();
-      let moreBtn = null;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        moreBtn = findMoreActionsButton();
-        if (moreBtn) break;
-        await sleep(400);
+      let menuOpened = false;
+
+      // Thử tối đa 3 lượt (mỗi lượt tìm nút và click bằng chuỗi Pointer/Mouse Event)
+      for (let retry = 0; retry < 3 && !menuOpened; retry++) {
+        wakeUpToolbar();
+        let moreBtn = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          moreBtn = findMoreActionsButton();
+          if (moreBtn) break;
+          await sleep(350);
+        }
+
+        if (!moreBtn) {
+          console.warn(`[AutoMeet] Chưa tìm thấy nút 3 chấm More actions (lần thử ${retry + 1})`);
+          await sleep(500);
+          continue;
+        }
+
+        console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
+        simulateUserClick(moreBtn);
+
+        // Chờ menu More actions xuất hiện (tối đa 2s)
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await sleep(250);
+          moreMenu = findOpenMoreMenu();
+          if (moreMenu) {
+            menuOpened = true;
+            break;
+          }
+        }
       }
 
-      if (!moreBtn) {
-        console.warn('[AutoMeet] Chưa tìm thấy nút 3 chấm More actions!');
-        showToast('⚠ Chưa tìm thấy thanh công cụ. Hãy di chuột vào màn hình cuộc họp và thử lại.');
+      if (!moreMenu) {
+        console.warn('[AutoMeet] Không mở được menu More actions!');
+        showToast('⚠ Chưa mở được menu thanh công cụ. Hãy di chuột vào giữa màn hình cuộc họp và bấm lại!');
         return;
-      }
-
-      console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
-      moreBtn.click();
-
-      // Chờ menu More actions xuất hiện (tối đa 2.5s)
-      for (let attempt = 0; attempt < 10; attempt++) {
-        await sleep(250);
-        moreMenu = findOpenMoreMenu();
-        if (moreMenu) break;
       }
     }
 
     // Bước 2: Tìm chính xác mục "Record" trong menu
     let recordItem = null;
     for (let attempt = 0; attempt < 6; attempt++) {
-      // Ưu tiên tìm item có aria-label="Record"
-      recordItem = document.querySelector(
-        '[aria-label="Record"], [aria-label*="Record" i], [aria-label*="Ghi lại" i]'
-      );
-
-      // Nếu không tìm thấy bằng aria-label trực tiếp, quét trong container menu
-      if (!recordItem || recordItem.closest('#automeet-hud-container, .automeet-toast')) {
-        const menuContainer = findOpenMoreMenu();
-        if (menuContainer) {
-          const items = Array.from(menuContainer.querySelectorAll('[role="button"], [role="menuitem"], .contextMenuItem'));
-          recordItem = items.find(el => {
-            const text = (el.textContent || '').trim().toLowerCase();
-            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-            return text === 'record' || aria === 'record' || text === 'ghi lại' || aria === 'ghi lại';
-          });
-        }
-      }
-
-      if (recordItem && !recordItem.closest('#automeet-hud-container, .automeet-toast')) break;
+      recordItem = findRecordMenuItem(moreMenu);
+      if (recordItem) break;
       await sleep(250);
+      moreMenu = findOpenMoreMenu();
     }
 
     if (!recordItem) {
@@ -272,11 +354,11 @@
     }
 
     console.log('[AutoMeet] Đang click mục Record trong menu...');
-    recordItem.click();
+    simulateUserClick(recordItem);
 
-    // Bước 3: Chờ modal Record xuất hiện và highlight nút Start (tối đa 3s)
+    // Bước 3: Chờ modal Record xuất hiện và highlight nút Start (tối đa 3.5s)
     let startBtn = null;
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 14; attempt++) {
       await sleep(250);
       startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]') ||
         Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
@@ -325,7 +407,7 @@
     if (!moreMenu) {
       const moreBtn = findMoreActionsButton();
       if (moreBtn) {
-        moreBtn.click();
+        simulateUserClick(moreBtn);
         for (let i = 0; i < 8; i++) {
           await sleep(200);
           moreMenu = findOpenMoreMenu();
@@ -351,7 +433,7 @@
     }
 
     if (stopItem) {
-      stopItem.click();
+      simulateUserClick(stopItem);
       await sleep(500);
 
       // Nếu có hộp thoại xác nhận Dừng
@@ -359,7 +441,7 @@
         '[data-testid="confirm-dialog-ok"], button[aria-label*="Stop" i], button[aria-label*="Dừng" i]'
       );
       if (confirmBtn && !confirmBtn.closest('#automeet-hud-container, .automeet-toast')) {
-        confirmBtn.click();
+        simulateUserClick(confirmBtn);
       }
 
       showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads).');
@@ -367,7 +449,7 @@
       // Thử bấm trực tiếp vào biểu tượng Recording ở góc trên nếu có
       const recIcon = document.querySelector('[data-testid="recording-indicator"], .recording-icon');
       if (recIcon) {
-        recIcon.click();
+        simulateUserClick(recIcon);
       }
       showToast('⏹ Đã gửi yêu cầu dừng Record.');
     }
