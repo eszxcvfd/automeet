@@ -25,7 +25,8 @@ echo "🚀 Đang khởi chạy Chrome với chế độ Auto-Allow Tab Capture..
 echo "Sử dụng binary: $CHROME_BIN"
 
 "$CHROME_BIN" \
+    --auto-select-tab-capture-source-by-title="Staff" \
+    --auto-select-desktop-capture-source="Staff" \
+    --auto-select-tab-capture-source-by-title="Jitsi Meet" \
     --auto-select-desktop-capture-source="Jitsi Meet" \
-    --use-fake-ui-for-media-stream \
-    --enable-usermedia-screen-capturing \
     https://meet.jit.si/ &
