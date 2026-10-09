@@ -103,7 +103,8 @@
   // 3. Hook window.showSaveFilePicker to eliminate the Save As dialog
   window.showSaveFilePicker = async function(options) {
     console.log('[AutoMeet Inpage] showSaveFilePicker intercepted. Auto-saving without prompt:', options);
-    const filename = options?.suggestedName || `AutoMeet_${Date.now()}.webm`;
+    const rawName = options?.suggestedName || `AutoMeet_${Date.now()}.webm`;
+    const filename = rawName.replace(/:/g, '-');
     const chunks = [];
     let position = 0;
 
