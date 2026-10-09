@@ -13,7 +13,8 @@
    * @returns {number}
    */
   function getISOWeekNumber(d) {
-    const target = d ? new Date(d.getTime()) : new Date();
+    const target = d instanceof Date ? new Date(d.getTime()) : (d ? new Date(d) : new Date());
+    if (isNaN(target.getTime())) return 1;
     const date = new Date(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()));
     // Chuẩn ISO: Ngày thứ 5 quyết định tuần thuộc về năm nào.
     const dayNum = date.getUTCDay() || 7;
@@ -25,11 +26,12 @@
   /**
    * Tính thứ trong tuần theo quy ước:
    * Thứ 2 = 2, Thứ 3 = 3, Thứ 4 = 4, Thứ 5 = 5, Thứ 6 = 6, Thứ 7 = 7, Chủ nhật = 8.
-   * @param {Date} [d=new Date()]
+   * @param {Date|string|number} [d=new Date()]
    * @returns {number}
    */
   function getDayNumber(d) {
-    const target = d || new Date();
+    const target = d instanceof Date ? d : (d ? new Date(d) : new Date());
+    if (isNaN(target.getTime())) return 2;
     const day = target.getDay(); // 0 is Sunday, 1 is Monday ... 6 is Saturday
     return day === 0 ? 8 : day + 1;
   }
@@ -38,14 +40,15 @@
    * Tạo tên phòng Meet theo quy luật:
    * Staff{Năm}W{số thứ tự tuần trong năm}T{số thứ tự ngày trong tuần}
    * Ví dụ: 08/10/2026 -> Staff2026W41T5
-   * @param {Date} [d=new Date()]
+   * @param {Date|string|number} [d=new Date()]
    * @returns {string}
    */
   function getRoomName(d) {
-    const target = d || new Date();
-    const year = target.getFullYear();
-    const week = getISOWeekNumber(target);
-    const day = getDayNumber(target);
+    const target = d instanceof Date ? d : (d ? new Date(d) : new Date());
+    const valid = !isNaN(target.getTime()) ? target : new Date();
+    const year = valid.getFullYear();
+    const week = getISOWeekNumber(valid);
+    const day = getDayNumber(valid);
     return `Staff${year}W${week}T${day}`;
   }
 
@@ -247,6 +250,58 @@
     }
   }
 
+  /**
+   * Chuẩn hóa tên tệp loại bỏ mọi ký tự cấm theo chuẩn NTFS (Windows) và POSIX (Linux):
+   * Không chứa: \ / : * ? " < > | và các mã điều khiển 0x00-0x1F.
+   * Tự động cô lập basename, bảo vệ khỏi tên thiết bị cấm trên Windows (CON, PRN, AUX, NUL, COM0-9, LPT0-9, CLOCK$, CONIN$, CONOUT$).
+   * Giới hạn độ dài <= 240 ký tự an toàn trước giới hạn MAX_PATH (255 ký tự).
+   * Định dạng chuẩn video AutoMeet: Staff{Year}W{Week}T{Day}_{YYYY-MM-DD}_{HH-MM-SS}.webm
+   */
+  function sanitizeFilename(filename) {
+    if (!filename) return 'recording.webm';
+    let base = String(filename).split(/[/\\]/).pop() || 'recording.webm';
+    let safe = base.replace(/[/\\?%*:|"<>]/g, '_').replace(/[\x00-\x1f\x80-\x9f]/g, '').trim();
+    safe = safe.replace(/^[\s.]+|[\s.]+$/g, '');
+    if (!safe) safe = 'recording.webm';
+
+    let isWebm = safe.toLowerCase().endsWith('.webm');
+    let stem = isWebm ? safe.slice(0, -5) : safe;
+    stem = stem.replace(/^[\s.]+|[\s.]+$/g, '');
+    if (!stem) stem = 'recording';
+
+    if (stem.length > 240) stem = stem.slice(0, 240).trim();
+
+    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9]|conin\$|conout\$|clock\$)(\.|$)/i.test(stem)) {
+      stem = '_' + stem;
+    }
+
+    return stem + '.webm';
+  }
+
+  /**
+   * Chuẩn hóa đường dẫn thư mục con cho Chrome Downloads API:
+   * Luôn sử dụng dấu gạch chéo xuôi '/', là đường dẫn tương đối, không chứa '..' hay ký tự cấm NTFS/POSIX
+   */
+  function sanitizeSubfolder(subfolder) {
+    if (!subfolder) return 'AutoMeet_Recordings';
+    let folder = String(subfolder).replace(/\\/g, '/');
+    folder = folder.replace(/^[a-zA-Z]:/g, '');
+    folder = folder.replace(/^\/+|\/+$/g, '');
+    const parts = folder.split('/').filter(p => p && p !== '.' && p !== '..');
+    const cleanParts = parts
+      .map(p => {
+        let clean = p.replace(/[/\\?%*:|"<>]/g, '_').replace(/[\x00-\x1f\x80-\x9f]/g, '').trim();
+        clean = clean.replace(/^[\s.]+|[\s.]+$/g, '');
+        if (clean.length > 240) clean = clean.slice(0, 240).trim();
+        if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9]|conin\$|conout\$|clock\$)(\.|$)/i.test(clean)) {
+          clean = '_' + clean;
+        }
+        return clean;
+      })
+      .filter(Boolean);
+    return cleanParts.length > 0 ? cleanParts.join('/') : 'AutoMeet_Recordings';
+  }
+
   // Export sang globalThis để dùng được cho cả Content Script, Background và Popup
   const exports = {
     getISOWeekNumber,
@@ -260,6 +315,8 @@
     saveSettings,
     saveDirectoryHandle,
     getSavedDirectoryHandle,
+    sanitizeFilename,
+    sanitizeSubfolder,
     DEFAULT_SETTINGS
   };
 

@@ -132,8 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           await utils.saveDirectoryHandle(dirHandle);
 
           // Lưu tên thư mục vào chrome.storage
+          const cleanSub = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(dirHandle.name) : dirHandle.name;
           settings.saveLocationName = dirHandle.name;
-          settings.saveSubfolder = dirHandle.name;
+          settings.saveSubfolder = cleanSub;
           await utils.saveSettings(settings);
 
           updateStorageDisplay(settings);
@@ -143,8 +144,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         const customName = prompt('Nhập tên thư mục con trong Downloads để lưu video:', settings.saveSubfolder || 'AutoMeet_Recordings');
         if (customName && customName.trim()) {
-          settings.saveLocationName = customName.trim();
-          settings.saveSubfolder = customName.trim();
+          const cleanSub = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(customName.trim()) : customName.trim();
+          settings.saveLocationName = cleanSub;
+          settings.saveSubfolder = cleanSub;
           await utils.saveSettings(settings);
           updateStorageDisplay(settings);
           notifyMeetingTabs();

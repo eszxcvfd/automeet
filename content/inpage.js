@@ -23,6 +23,32 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  function getISOWeekNumber(d) {
+    const target = d instanceof Date ? new Date(d.getTime()) : (d ? new Date(d) : new Date());
+    if (isNaN(target.getTime())) return 1;
+    const date = new Date(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  }
+
+  function getDayNumber(d) {
+    const target = d instanceof Date ? d : (d ? new Date(d) : new Date());
+    if (isNaN(target.getTime())) return 2;
+    const day = target.getDay();
+    return day === 0 ? 8 : day + 1;
+  }
+
+  function getStandardRoomName(d) {
+    const target = d instanceof Date ? d : (d ? new Date(d) : new Date());
+    const valid = !isNaN(target.getTime()) ? target : new Date();
+    const year = valid.getFullYear();
+    const week = getISOWeekNumber(valid);
+    const day = getDayNumber(valid);
+    return `Staff${year}W${week}T${day}`;
+  }
+
   /**
    * IndexedDB Helper để lấy DirectoryHandle đã cấp quyền (nếu có)
    */
@@ -206,10 +232,10 @@
 
         let patched = false;
         // EBML Duration Element ID là 0x44 0x89
-        for (let i = 0; i < u8.length - 11; i++) {
+        for (let i = 0; i <= u8.length - 7; i++) {
           if (u8[i] === 0x44 && u8[i + 1] === 0x89) {
             const size = u8[i + 2];
-            if (size === 0x88) { // Float64 (8 bytes)
+            if (size === 0x88 && (i + 11 <= u8.length)) { // Float64 (8 bytes)
               const view = new DataView(arrayBuf, i + 3, 8);
               const val = view.getFloat64(0, false);
               // Nếu thời lượng là 240 giờ hoặc không hợp lệ -> Ghi đè thời lượng thực tế
@@ -219,7 +245,7 @@
                 patched = true;
               }
               break;
-            } else if (size === 0x84) { // Float32 (4 bytes)
+            } else if (size === 0x84 && (i + 7 <= u8.length)) { // Float32 (4 bytes)
               const view = new DataView(arrayBuf, i + 3, 4);
               const val = view.getFloat32(0, false);
               if (val >= 860000000 || val <= 0 || isNaN(val) || !isFinite(val)) {
@@ -257,7 +283,7 @@
       const virtualStream = new VirtualFileStream();
       let isClosed = false;
 
-      // 1. Chuẩn bị tên file chuẩn
+      // 1. Chuẩn bị tên file chuẩn: Staff{Year}W{Week}T{Day}_{YYYY-MM-DD}_{HH-MM-SS}.webm
       const now = new Date();
       const y = now.getFullYear();
       const mo = String(now.getMonth() + 1).padStart(2, '0');
@@ -265,7 +291,13 @@
       const h = String(now.getHours()).padStart(2, '0');
       const mi = String(now.getMinutes()).padStart(2, '0');
       const s = String(now.getSeconds()).padStart(2, '0');
-      const room = window.location.pathname.replace(/^\/+|\/+$/g, '') || 'StaffMeet';
+
+      let room = window.location.pathname.split('/').filter(Boolean)[0] || '';
+      // Loại bỏ hoàn toàn các ký tự cấm trên Windows (NTFS) và POSIX (/ \ ? % * : | " < > và control chars)
+      room = room.replace(/[/\\?%*:|"<>]/g, '_').replace(/[\x00-\x1f\x80-\x9f]/g, '').trim();
+      if (!room || room.toLowerCase() === 'staffmeet' || !/^staff\d+w\d+t\d+/i.test(room)) {
+        room = getStandardRoomName(now);
+      }
       const cleanFilename = `${room}_${y}-${mo}-${d}_${h}-${mi}-${s}.webm`;
 
       // 2. Thử ghi trực tiếp vào FileSystemDirectoryHandle nếu người dùng đã cấp quyền trên trang
@@ -333,26 +365,20 @@
 
           const blobUrl = URL.createObjectURL(finalBlob);
 
-          // 1. Tải về máy qua thẻ <a>
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = blobUrl;
-          a.download = cleanFilename;
-          document.body.appendChild(a);
-          a.click();
-          console.log(`[AutoMeet Inpage] Đã kích hoạt lưu video chuẩn: ${cleanFilename}`);
-
-          setTimeout(() => {
-            a.remove();
-          }, 60000);
-
-          // 2. Gửi thông điệp đến Content Script -> Background để tải vào thư mục con đã cấu hình
+          // Gửi thông điệp đến Content Script -> Background để tải vào thư mục con đã cấu hình (AutoMeet_Recordings)
+          // Không gọi đồng thời thẻ <a> để tránh tạo 2 bản tải về trùng lặp trên đĩa
           window.postMessage({
             type: 'AUTOMEET_FILE_RECORDED',
             url: blobUrl,
             filename: cleanFilename,
             size: finalBlob.size
           }, '*');
+          console.log(`[AutoMeet Inpage] Đã gửi thông điệp lưu video chuẩn: ${cleanFilename}`);
+
+          // Giải phóng URL đối tượng sau 2 phút để tránh rò rỉ bộ nhớ
+          setTimeout(() => {
+            try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+          }, 120000);
         }
       };
 

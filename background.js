@@ -231,11 +231,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'DOWNLOAD_RECORDING') {
     (async () => {
       const settings = utils ? await utils.loadSettings() : null;
-      const subfolder = settings?.saveSubfolder || 'AutoMeet_Recordings';
-      const cleanFilename = request.filename || 'recording.webm';
+      const subfolder = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(settings?.saveSubfolder) : 'AutoMeet_Recordings';
+      const cleanFilename = utils && utils.sanitizeFilename ? utils.sanitizeFilename(request.filename) : (request.filename || 'recording.webm');
       const targetPath = `${subfolder}/${cleanFilename}`;
 
-      // Tự động lưu video vào thư mục người dùng đã chọn trước đó (KHÔNG POPUP HỎI NƠI LƯU)
+      // Tự động lưu video vào thư mục con chuẩn (KHÔNG POPUP HỎI NƠI LƯU, tương thích Windows & Linux)
       if (chrome.downloads && request.url) {
         chrome.downloads.download({
           url: request.url,
@@ -248,7 +248,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             chrome.downloads.download({
               url: request.url,
               filename: cleanFilename,
-              saveAs: false
+              saveAs: false,
+              conflictAction: 'uniquify'
+            }, (fallbackId) => {
+              if (chrome.runtime.lastError) {
+                console.error('[AutoMeet Background] Lỗi chrome.downloads fallback:', chrome.runtime.lastError);
+              } else {
+                console.log('[AutoMeet Background] Đã tự động lưu video vào thư mục Downloads gốc:', cleanFilename, 'ID:', fallbackId);
+              }
             });
           } else {
             console.log('[AutoMeet Background] Đã tự động lưu video vào thư mục:', targetPath, 'ID:', downloadId);
@@ -340,3 +347,55 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   return true;
 });
+
+/**
+ * Tự động điều hướng và bảo đảm tệp ghi hình lưu đúng vào thư mục con (AutoMeet_Recordings),
+ * không kích hoạt hộp thoại "Save As" trên cả Windows & Linux, tự động đổi tên khi trùng (uniquify).
+ */
+if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    if (!item) return;
+
+    // Trích xuất tên tệp cơ bản (basename), loại bỏ đường dẫn thư mục hiện có
+    const rawName = item.filename || '';
+    let baseName = rawName.split(/[/\\]/).pop() || '';
+
+    // Kiểm tra chính xác xem tệp có phải là video ghi hình của AutoMeet hay không:
+    // 1. Do chính AutoMeet kích hoạt tải (byExtensionId trùng khớp)
+    // 2. Định dạng tên chuẩn: Staff{Year}W{Week}T{Day}_...webm hoặc bắt đầu bằng Staff...webm
+    // 3. Tải từ URL blob/meet.jit.si và có phần mở rộng .webm
+    const isFromMeet = Boolean(
+      (item.url && (item.url.includes('meet.jit.si') || item.url.startsWith('blob:https://meet.jit.si/'))) ||
+      (item.referrer && item.referrer.includes('meet.jit.si'))
+    );
+    const isExtensionInitiated = Boolean(item.byExtensionId && chrome.runtime?.id && item.byExtensionId === chrome.runtime.id);
+    const isWebm = baseName.toLowerCase().endsWith('.webm') || (item.mime && item.mime.includes('webm'));
+    const isAutoMeetPattern = /^Staff\d+W\d+T\d+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.webm$/i.test(baseName) ||
+      (baseName.toLowerCase().startsWith('staff') && isWebm && isFromMeet) ||
+      (baseName.toLowerCase().includes('automeet') && isWebm);
+
+    const isAutoMeet = (isExtensionInitiated && isWebm) || (isFromMeet && isWebm) || isAutoMeetPattern;
+
+    if (isAutoMeet) {
+      (async () => {
+        try {
+          const settings = utils ? await utils.loadSettings() : null;
+          const subfolder = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(settings?.saveSubfolder) : 'AutoMeet_Recordings';
+
+          // Nếu baseName vô tình bị dính tiền tố subfolder (ví dụ AutoMeet_Recordings_), gỡ bỏ để tránh lặp lại
+          if (baseName.toLowerCase().startsWith(`${subfolder.toLowerCase()}_`)) {
+            baseName = baseName.substring(subfolder.length + 1);
+          }
+
+          const cleanName = utils && utils.sanitizeFilename ? utils.sanitizeFilename(baseName) : (baseName || 'recording.webm');
+          const targetPath = `${subfolder}/${cleanName}`;
+          suggest({ filename: targetPath, conflictAction: 'uniquify' });
+        } catch (e) {
+          suggest();
+        }
+      })();
+      return true; // Báo hiệu phản hồi gợi ý bất đồng bộ
+    }
+  });
+}
+

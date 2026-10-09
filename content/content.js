@@ -66,12 +66,30 @@
             action: 'DOWNLOAD_RECORDING',
             url: event.data.url,
             filename: event.data.filename
-          }, () => {
+          }, (res) => {
             const err = chrome.runtime.lastError;
+            if (err || (res && !res.success)) {
+              console.warn('[AutoMeet Content] Không thể gửi tải qua Background, dùng fallback trực tiếp:', err);
+              triggerFallbackDownload(event.data.url, event.data.filename);
+            }
           });
-        } catch (e) {}
+        } catch (e) {
+          triggerFallbackDownload(event.data.url, event.data.filename);
+        }
       }
     });
+
+  function triggerFallbackDownload(url, filename) {
+    try {
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 60000);
+    } catch (err) {}
+  }
 
     // 1. Kiểm tra nếu đang ở trang chủ (chưa vào phòng)
     const pathname = window.location.pathname.replace(/^\/+|\/+$/g, '');
@@ -279,7 +297,7 @@
    * Tự động kiểm tra và kích hoạt hoặc dừng record theo khung giờ lịch trình
    */
   async function checkSlotScheduleAutoRecord() {
-    if (!currentSettings || !currentSettings.enableAutoRecord || !currentSettings.autoRecordIfInSlot) return;
+    if (!utils || !currentSettings || !currentSettings.enableAutoRecord || !currentSettings.autoRecordIfInSlot) return;
     if (isStartingRecording || isStoppingRecording) return;
 
     // Nếu đang ở màn hình chờ Pre-join, ưu tiên bấm Tham gia

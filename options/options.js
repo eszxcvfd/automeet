@@ -39,9 +39,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
         if (dirHandle) {
           await utils.saveDirectoryHandle(dirHandle);
-          if (inputSaveFolder) inputSaveFolder.value = dirHandle.name;
+          const cleanName = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(dirHandle.name) : dirHandle.name;
+          if (inputSaveFolder) inputSaveFolder.value = cleanName;
           settings.saveLocationName = dirHandle.name;
-          settings.saveSubfolder = dirHandle.name;
+          settings.saveSubfolder = cleanName;
           await utils.saveSettings(settings);
           if (storageHint) {
             storageHint.textContent = `✓ Đã chọn và cấp quyền lưu vào thư mục: ${dirHandle.name}`;
@@ -90,7 +91,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    const folderName = inputSaveFolder ? (inputSaveFolder.value.trim() || 'AutoMeet_Recordings') : 'AutoMeet_Recordings';
+    const rawFolder = inputSaveFolder ? inputSaveFolder.value.trim() : 'AutoMeet_Recordings';
+    const folderName = utils && utils.sanitizeSubfolder ? utils.sanitizeSubfolder(rawFolder) : (rawFolder || 'AutoMeet_Recordings');
 
     const newSettings = {
       displayName: inputDisplayName.value.trim() || 'Staff Member',
