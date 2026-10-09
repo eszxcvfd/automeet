@@ -56,7 +56,7 @@
    * Bộ đệm tệp ảo (Virtual File Stream) mô phỏng FileSystemWritableFileStream chuẩn W3C.
    * Giải quyết triệt để vấn đề "thời lượng 240:00:00" của Jitsi Meet:
    * - Khi bắt đầu, Jitsi gọi fixDuration với 864,000,000 ms (240 giờ) để dự trữ chỗ trong header WebM.
-   * - Khi kết thúc, Jitsi gọi stream.seek(0) và stream.write(...) để ghi đè thời lượng thực tế (ví dụ: 50 giây).
+   * - Khi kết thúc, Jitsi gọi stream.seek(0) và stream.write(...) để ghi đè thời lượng thực tế của phiên họp.
    * - VirtualFileStream xử lý chính xác thao tác seek(0) ghi đè lên header thay vì nối vào cuối file.
    * - Ngoài ra, hàm getFinalBlob() tự động quét kiểm tra và vá trực tiếp trường Duration EBML
    *   nếu giá trị dự trữ 240h chưa được thay thế, đảm bảo 100% video xuất ra có thời lượng thực tế chuẩn xác.
@@ -67,6 +67,7 @@
       this.cursor = 0;
       this.size = 0;
       this.recordingStartTime = Date.now();
+      this.firstDataTime = null;
     }
 
     async write(data) {
@@ -92,6 +93,10 @@
 
       const blob = data instanceof Blob ? data : new Blob([data]);
       const blobSize = blob.size;
+
+      if (!this.firstDataTime && blobSize > 0) {
+        this.firstDataTime = Date.now();
+      }
 
       // 1. Trường hợp tuần tự: cursor nằm ở cuối file -> Nối tiếp chunk mới
       if (this.cursor === this.size) {
@@ -189,7 +194,8 @@
       if (this.chunks.length === 0) return null;
 
       const rawBlob = new Blob(this.chunks.map(c => c.blob), { type: 'video/webm' });
-      const actualDurationMs = Math.max(1000, Date.now() - this.recordingStartTime);
+      const startRef = this.firstDataTime || this.recordingStartTime;
+      const actualDurationMs = Math.max(1000, Date.now() - startRef);
 
       // Quét và vá trường EBML Duration nếu header vẫn còn chứa 240:00:00 (864,000,000 ms)
       try {
