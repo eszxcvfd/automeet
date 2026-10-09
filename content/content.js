@@ -951,7 +951,6 @@
           ? `🔴 ĐANG GHI HÌNH${timerStr} (${activeSchedule?.name})` 
           : `🔴 ĐANG GHI HÌNH${timerStr}`;
       }
-    }
     } else if (isPrejoinScreen()) {
       if (statusPill) {
         statusPill.className = 'automeet-status-pill waiting';
