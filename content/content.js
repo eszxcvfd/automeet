@@ -66,6 +66,8 @@
             action: 'DOWNLOAD_RECORDING',
             url: event.data.url,
             filename: event.data.filename
+          }, () => {
+            const err = chrome.runtime.lastError;
           });
         } catch (e) {}
       }

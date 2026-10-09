@@ -8,7 +8,7 @@
 try {
   importScripts('utils.js');
 } catch (e) {
-  console.error('[AutoMeet ServiceWorker] Không thể nạp utils.js:', e);
+  console.error('[AutoMeet Background] Không thể nạp utils.js:', e);
 }
 
 const utils = self.AutoMeetUtils;
@@ -33,8 +33,16 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     await utils.saveSettings(settings);
   }
 
+  // Nếu có tab meet.jit.si đang mở từ trước khi cập nhật, tự động tải lại tab để nạp Content Script mới
+  chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+    tabs?.forEach(t => {
+      console.log(`[AutoMeet Background] Tự động làm mới tab Jitsi (ID: ${t.id}) sau khi cập nhật extension...`);
+      try { chrome.tabs.reload(t.id); } catch (e) {}
+    });
+  });
+
   setupPeriodicAlarms();
-  setTimeout(syncScheduleState, 2000);
+  setTimeout(syncScheduleState, 2500);
 });
 
 // 2. Khi trình duyệt khởi động (onStartup)
@@ -71,6 +79,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     setTimeout(syncScheduleState, 2000);
   }
 });
+
+/**
+ * Gửi message an toàn đến tab:
+ * - Luôn có callback để tránh "Uncaught (in promise) Error: Could not establish connection"
+ * - Tự động tải lại tab nếu tab bị mất kết nối script (sau khi reload extension)
+ */
+function safeSendTabMessage(tabId, message, callback) {
+  if (!tabId) {
+    if (callback) callback(null);
+    return;
+  }
+  try {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        if (err.message && err.message.includes('Receiving end does not exist')) {
+          console.log(`[AutoMeet Background] Tab ${tabId} chưa nạp Content Script mới -> Tự động tải lại tab...`);
+          try {
+            chrome.tabs.reload(tabId);
+          } catch (e) {}
+        }
+        if (callback) callback(null, err);
+        return;
+      }
+      if (callback) callback(response, null);
+    });
+  } catch (e) {
+    if (callback) callback(null, e);
+  }
+}
 
 /**
  * Tự động kiểm tra thời gian và đồng bộ hóa trạng thái cuộc họp & ghi hình
@@ -114,14 +152,12 @@ async function syncScheduleState() {
 
     // 3. Đảm bảo tab Jitsi nhận lệnh bắt đầu ghi hình
     if (tab && tab.id) {
-      const delay = justCreated ? 4000 : 1000;
+      const delay = justCreated ? 4000 : 1200;
       setTimeout(() => {
-        try {
-          chrome.tabs.sendMessage(tab.id, {
-            action: 'START_RECORDING',
-            schedule: activeSched
-          });
-        } catch (e) {}
+        safeSendTabMessage(tab.id, {
+          action: 'START_RECORDING',
+          schedule: activeSched
+        });
       }, delay);
     }
   } else {
@@ -133,9 +169,7 @@ async function syncScheduleState() {
 
       const jitsiTabs = await findMeetingTabs();
       for (const t of jitsiTabs) {
-        try {
-          chrome.tabs.sendMessage(t.id, { action: 'STOP_RECORDING' });
-        } catch (e) {}
+        safeSendTabMessage(t.id, { action: 'STOP_RECORDING' });
       }
 
       if (settings.notifyOnRecord && chrome.notifications) {
@@ -235,7 +269,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const delay = isNew ? 3500 : 200;
       setTimeout(() => {
         if (tab && tab.id) {
-          chrome.tabs.sendMessage(tab.id, { action: 'START_RECORDING' }, (res) => {
+          safeSendTabMessage(tab.id, { action: 'START_RECORDING' }, (res) => {
             sendResponse(res || { success: true });
           });
         } else {
@@ -251,12 +285,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const tabs = await findMeetingTabs();
       let stopped = false;
       for (const t of tabs) {
-        try {
-          chrome.tabs.sendMessage(t.id, { action: 'STOP_RECORDING' });
-          stopped = true;
-        } catch (e) {}
+        safeSendTabMessage(t.id, { action: 'STOP_RECORDING' }, (res) => {
+          if (res?.success) stopped = true;
+        });
       }
-      sendResponse({ success: stopped });
+      sendResponse({ success: true });
     })();
     return true;
   }
@@ -266,8 +299,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const todayRoom = utils ? utils.getRoomName() : '';
       const tab = await findExistingMeetingTab(todayRoom);
       if (tab && tab.id) {
-        chrome.tabs.sendMessage(tab.id, { action: 'GET_STATUS' }, (res) => {
-          if (!chrome.runtime.lastError && res) {
+        safeSendTabMessage(tab.id, { action: 'GET_STATUS' }, (res, err) => {
+          if (!err && res) {
             sendResponse({
               hasMeetingTab: true,
               isRecording: Boolean(res.isRecording),

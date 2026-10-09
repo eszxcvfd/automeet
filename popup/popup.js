@@ -136,7 +136,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   function notifyMeetingTabs() {
     try {
       chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
-        tabs?.forEach(t => chrome.tabs.sendMessage(t.id, { action: 'RELOAD_SETTINGS' }));
+        tabs?.forEach(t => {
+          chrome.tabs.sendMessage(t.id, { action: 'RELOAD_SETTINGS' }, () => {
+            const err = chrome.runtime.lastError;
+          });
+        });
       });
     } catch (e) {}
   }
