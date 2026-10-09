@@ -56,7 +56,7 @@
    */
   function getMeetingUrl(d) {
     const room = getRoomName(d);
-    return `https://meet.jit.si/${room}#config.prejoinConfig.enabled=false`;
+    return `https://meet.jit.si/${room}`;
   }
 
   /**
