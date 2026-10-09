@@ -26,6 +26,16 @@
         "https://meet.jit.si/*"
       ],
       "js": [
+        "content/inpage.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://meet.jit.si/*"
+      ],
+      "js": [
         "utils.js",
         "content/content.js"
       ],

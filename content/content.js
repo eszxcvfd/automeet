@@ -28,6 +28,31 @@
       currentSettings = await utils.loadSettings();
     }
 
+    // Luôn dọn dẹp HUD cũ trên màn hình theo yêu cầu người dùng (chỉ dùng menu extension)
+    const existingHud = document.getElementById('automeet-hud-container');
+    if (existingHud) existingHud.remove();
+    hudElement = null;
+
+    // Lắng nghe sự kiện đồng bộ từ In-page script (chạy ở MAIN world)
+    window.addEventListener('message', (event) => {
+      if (!event.data) return;
+      if (event.data.type === 'AUTOMEET_SYNC_RECORDING_STATE') {
+        if (typeof event.data.isRunning === 'boolean') {
+          const wasRunning = isRecordingActive;
+          isRecordingActive = event.data.isRunning;
+          if (isRecordingActive && !wasRunning) {
+            recordingStartTime = Date.now();
+            updateTopRecordingPill();
+          } else if (!isRecordingActive && wasRunning) {
+            recordingStartTime = null;
+            updateTopRecordingPill();
+          }
+        }
+      } else if (event.data.action === 'AUTOMEET_LOCAL_REC_SAVED') {
+        showToast(`💾 Đã lưu video Local Recording của Jitsi: ${event.data.filename}`);
+      }
+    });
+
     // 1. Kiểm tra nếu đang ở trang chủ (chưa vào phòng)
     const pathname = window.location.pathname.replace(/^\/+|\/+$/g, '');
     if (!pathname) {
@@ -37,9 +62,6 @@
 
     // 2. Nếu đang ở trang phòng họp
     startMeetingWatcher();
-    if (currentSettings?.showFloatingHud) {
-      injectHUD();
-    }
     listenForMessages();
 
     // 3. Khởi động kiểm tra lịch sau 3.5 giây khi vào phòng
@@ -112,39 +134,14 @@
    * Tự động tắt các thông báo / banner che khuất màn hình (như "Invite others", "Dismiss", lỗi Recording của Jitsi)
    */
   function autoDismissPopups() {
-    // 1. Tự động đóng và gỡ bỏ thông báo lỗi "Recording failed to start" của Jitsi
-    const jitsiAlerts = Array.from(document.querySelectorAll(
-      '.css-146e27r-notification, .jitsi-notification, [role="alert"], div[class*="notification"]'
-    ));
-    for (const alert of jitsiAlerts) {
-      if (alert.closest('#automeet-hud-container, .automeet-toast, #automeet-rec-pill')) continue;
-      const text = (alert.textContent || '').toLowerCase();
-      if (text.includes('recording failed') || text.includes('failed to start') || text.includes('error starting')) {
-        const dismissBtn = alert.querySelector('button, [role="button"], a');
-        if (dismissBtn) {
-          try { dismissBtn.click(); } catch(e) {}
-        }
-        try { alert.remove(); } catch(e) {}
-      }
-    }
-
-    // 2. Tự động đóng các popup che khuất (Invite others, Dismiss, v.v.)
+    // Tự động đóng các popup che khuất không phải là dialog Record
     const dismissBtns = Array.from(document.querySelectorAll(
       'button[aria-label="Dismiss"], button[aria-label="Đóng"], button[aria-label="Close"], .close-btn, [data-testid="notifications.dismiss"]'
-    )).filter(b => !b.closest('#automeet-hud-container, .automeet-toast, [role="dialog"], #automeet-rec-pill'));
+    )).filter(b => !b.closest('.automeet-toast, [role="dialog"], #automeet-rec-pill'));
 
     dismissBtns.forEach(btn => {
       try { btn.click(); } catch(e) {}
     });
-
-    // 3. Tự động đóng hộp thoại Record của Jitsi nếu đang mở
-    const recordModal = document.querySelector('[role="dialog"][aria-label="Record"], [role="dialog"] #dialog-title');
-    if (recordModal) {
-      const closeBtn = document.querySelector('button[aria-label="Close dialog"], #modal-header-close-button');
-      if (closeBtn) {
-        try { closeBtn.click(); } catch(e) {}
-      }
-    }
   }
 
   /**
@@ -262,23 +259,30 @@
    * Kiểm tra xem Jitsi Meet hiện tại có đang trong trạng thái Record hay không
    */
   function checkRecordingState() {
-    // Tìm các chỉ báo ghi âm trên giao diện Jitsi
+    // 1. Tìm các chỉ báo ghi âm trên giao diện Jitsi
     const recBadge = document.querySelector(
       '[data-testid="recording-indicator"], .recording-icon, [aria-label*="Recording is on" i], [aria-label*="Đang ghi" i]'
     );
     
-    // Hoặc kiểm tra badge REC màu đỏ
+    // 2. Hoặc kiểm tra badge REC màu đỏ
     const recTextElements = Array.from(document.querySelectorAll('span, div')).filter(el => {
+      if (el.closest('.automeet-toast, #automeet-rec-pill')) return false;
       return el.textContent && el.textContent.trim() === 'REC' && el.offsetParent !== null;
     });
 
     const isJitsiRecording = !!recBadge || recTextElements.length > 0;
-    if (isJitsiRecording) {
-      if (!isRecordingActive) {
-        recordingStartTime = recordingStartTime || Date.now();
-      }
-      isRecordingActive = true;
+    const wasRecording = isRecordingActive;
+    isRecordingActive = isJitsiRecording;
+
+    if (isRecordingActive && !wasRecording) {
+      if (!recordingStartTime) recordingStartTime = Date.now();
+      updateTopRecordingPill();
+    } else if (!isRecordingActive && wasRecording) {
+      recordingStartTime = null;
+      updateTopRecordingPill();
     }
+
+    return isRecordingActive;
   }
 
   /**
@@ -314,12 +318,10 @@
     if (inSlot && activeSchedule) {
       // Đang trong khung giờ một ca làm việc
       // CHỈ KÍCH HOẠT ĐÚNG 1 LẦN CHO MỖI CA (Tránh lặp lại nhiều lần gây spam thông báo)
-      if (currentActiveSlotId !== activeSchedule.id && !isStartingRecording) {
+      if (currentActiveSlotId !== activeSchedule.id && !isStartingRecording && !isRecordingActive) {
         console.log(`[AutoMeet] Bắt đầu ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Record tự động...`);
         currentActiveSlotId = activeSchedule.id;
         isStartingRecording = true;
-        isRecordingActive = true;
-        if (!recordingStartTime) recordingStartTime = Date.now();
         showToast(`⏰ Đến ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}): Tự động kích hoạt Record...`);
 
         try {
@@ -328,8 +330,6 @@
           console.warn('[AutoMeet] Lỗi khi tự động kích hoạt Record:', err);
         } finally {
           isStartingRecording = false;
-          isRecordingActive = true;
-          updateHUD();
         }
       }
     } else {
@@ -344,10 +344,7 @@
           console.warn('[AutoMeet] Lỗi khi tự động dừng Record:', err);
         } finally {
           isStoppingRecording = false;
-          isRecordingActive = false;
           currentActiveSlotId = null;
-          recordingStartTime = null;
-          updateHUD();
         }
       }
     }
@@ -588,7 +585,7 @@
   }
 
   /**
-   * Kích hoạt Record (Tự động hoặc thủ công)
+   * Kích hoạt Record của chính nền tảng Jitsi Meet (Local Recording lưu về máy)
    */
   async function triggerStartRecording() {
     // 1. Kiểm tra nếu đang ở màn hình chờ Pre-join, tự động bấm Tham gia
@@ -604,94 +601,126 @@
       await sleep(1500);
     }
 
-    // 3. Kích hoạt Động cơ TabCapture độc lập của AutoMeet (Không phụ thuộc server Jitsi)
-    try {
-      if (chrome?.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({ action: 'START_TAB_CAPTURE' }).catch(() => {});
-      }
-    } catch (e) {}
-
-    // Đánh dấu trạng thái record thành công
-    isRecordingActive = true;
-    if (!recordingStartTime) {
-      recordingStartTime = Date.now();
+    // 3. Nếu Jitsi đã đang trong trạng thái Record, không kích hoạt lại
+    if (checkRecordingState()) {
+      showToast('🎥 Jitsi Meet hiện đang trong trạng thái ghi hình (Local Recording)!');
+      return;
     }
-    updateHUD();
-    updateTopRecordingPill();
-    playNotificationSound();
 
-    // 4. Tự động dọn dẹp các thông báo lỗi hoặc popup cũ của Jitsi
-    autoDismissPopups();
+    showToast('🎥 Đang kích hoạt Local Recording của Jitsi (Lưu local về máy)...');
 
-    showToast('🎥 AUTO-RECORD ĐÃ BẬT THÀNH CÔNG! Đang ghi hình & âm thanh tab (Video tự động lưu khi hết ca).');
+    // 4. Gửi tín hiệu kích hoạt trực tiếp tới inpage script (chạy trong MAIN world)
+    window.postMessage({ type: 'AUTOMEET_DISPATCH_START_LOCAL_REC' }, '*');
+
+    // 5. Đồng thời điều khiển giao diện Jitsi chuẩn
+    let startBtn = findStartRecordingButton();
+    if (!startBtn) {
+      // Mở menu 3 chấm More actions nếu chưa mở
+      if (!isMoreActionsMenuOpen()) {
+        wakeUpToolbar();
+        let moreBtn = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          moreBtn = findMoreActionsButton();
+          if (moreBtn) break;
+          await sleep(300);
+        }
+
+        if (moreBtn) {
+          console.log('[AutoMeet] Đang click nút 3 chấm More actions...', moreBtn);
+          simulateUserClick(moreBtn);
+          await sleep(400);
+        }
+      }
+
+      // Tìm mục Record trong menu
+      let recordItem = null;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        recordItem = findRecordMenuItem();
+        if (recordItem) break;
+        await sleep(250);
+      }
+
+      if (recordItem) {
+        console.log('[AutoMeet] Đang click mục Record trong menu...', recordItem);
+        simulateUserClick(recordItem);
+
+        // Chờ modal Record xuất hiện (tối đa 3.5s)
+        for (let attempt = 0; attempt < 14; attempt++) {
+          await sleep(250);
+          startBtn = findStartRecordingButton();
+          if (startBtn) break;
+        }
+      }
+    }
+
+    // Nếu modal Record đã mở trên màn hình:
+    if (startBtn) {
+      // ĐẢM BẢO CHỌN "LOCAL RECORDING" (LƯU LOCAL VỀ MÁY)
+      await ensureLocalRecordingSelected();
+
+      // Bấm nút Start của Jitsi
+      console.log('[AutoMeet] Bấm nút Start recording của Jitsi...', startBtn);
+      simulateUserClick(startBtn);
+
+      // Tự động kiểm tra các xác nhận tiếp theo nếu có
+      for (let i = 0; i < 4; i++) {
+        await sleep(350);
+        const confirmNext = Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
+          if (b.closest('.automeet-toast, #automeet-rec-pill')) return false;
+          const text = (b.textContent || '').trim().toLowerCase();
+          return text === 'confirm' || text === 'xác nhận' || text === 'continue' || text === 'tiếp tục' || text === 'ok';
+        });
+        if (confirmNext) {
+          simulateUserClick(confirmNext);
+          break;
+        }
+      }
+    }
   }
 
   /**
-   * Tự động xác nhận Bật Record 100% không cần người dùng nhấn tay
+   * Đảm bảo mục "Local recording" (Lưu về máy) được chọn trong modal Record của Jitsi
    */
-  async function autoConfirmStartRecording(startBtn) {
-    if (!startBtn) return;
-    console.log('[AutoMeet] Tự động xác nhận Bật Record, đang bấm nút Start...');
-    showToast('⚡ Tự động xác nhận Bật Record...');
+  async function ensureLocalRecordingSelected() {
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) return;
 
-    // 1. Tự động tích chọn checkbox đồng ý nếu có
-    const consentBoxes = document.querySelectorAll(
-      'input[type="checkbox"][id*="consent" i], input[type="checkbox"][name*="consent" i], input[type="checkbox"][data-testid*="consent" i]'
-    );
-    consentBoxes.forEach(cb => {
-      if (!cb.checked) {
-        cb.click();
-        cb.checked = true;
-      }
-    });
+    // Tìm nút dropdown Storage location
+    const storageBtn = dialog.querySelector('#recording-service-select, .css-908y7v-trigger, button[aria-haspopup="menu"]');
+    if (storageBtn) {
+      const currentText = (storageBtn.textContent || '').trim().toLowerCase();
+      if (!currentText.includes('local')) {
+        console.log('[AutoMeet] Storage location chưa phải Local recording, đang chọn Local recording...');
+        simulateUserClick(storageBtn);
+        await sleep(300);
 
-    await sleep(200);
-
-    // 2. Click nút Start
-    simulateUserClick(startBtn);
-
-    // 3. Tự động kiểm tra và bấm xác nhận các hộp thoại phát sinh tiếp theo
-    for (let i = 0; i < 4; i++) {
-      await sleep(350);
-      const confirmNext = Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
-        if (b.closest('#automeet-hud-container, .automeet-toast')) return false;
-        const text = (b.textContent || '').trim().toLowerCase();
-        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-        return text === 'confirm' || text === 'xác nhận' || text === 'continue' || text === 'tiếp tục' || text === 'ok';
-      });
-      if (confirmNext) {
-        console.log('[AutoMeet] Tự động bấm xác nhận tiếp theo:', confirmNext.textContent);
-        simulateUserClick(confirmNext);
-        break;
+        // Tìm mục Local recording trong danh sách menu vừa mở
+        const options = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], li, div[class*="item"]')).filter(
+          el => el.offsetParent !== null && !el.closest('.automeet-toast')
+        );
+        for (const opt of options) {
+          const optText = (opt.textContent || '').trim().toLowerCase();
+          if (optText.includes('local') || optText.includes('cục bộ') || optText.includes('máy tính')) {
+            console.log('[AutoMeet] Đã chọn option Local recording:', opt);
+            simulateUserClick(opt);
+            await sleep(250);
+            break;
+          }
+        }
       }
     }
-
-    // 4. Tự động ẩn popup từ chối lưu cloud của Jitsi (vì đã có TabCapture lưu video máy tính)
-    setTimeout(() => {
-      autoDismissPopups();
-    }, 1200);
-
-    isRecordingActive = true;
-    if (!recordingStartTime) recordingStartTime = Date.now();
-    updateHUD();
-    playNotificationSound();
-    showToast('🎥 ĐÃ TỰ ĐỘNG BẬT VÀ XÁC NHẬN RECORD THÀNH CÔNG!');
   }
 
   /**
-   * Tự động tắt Record (Đa tầng: Hỗ trợ Badge, Menu, Dialog xác nhận và XMPP Protocol)
+   * Tự động tắt Record trên Jitsi Meet (Dừng Local Recording và lưu video về máy)
    */
   async function triggerStopRecording() {
-    showToast('⏳ Đang xử lý dừng Record...');
+    showToast('⏳ Đang xử lý dừng Local Recording trên Jitsi...');
 
-    // 1. Luôn gửi tín hiệu dừng TabCapture ngầm đến Background để lưu file WebM về máy
-    try {
-      if (chrome?.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({ action: 'STOP_TAB_CAPTURE' }).catch(() => {});
-      }
-    } catch (e) {}
+    // 1. Gửi lệnh Redux stop trực tiếp tới inpage script (chạy trong MAIN world)
+    window.postMessage({ type: 'AUTOMEET_DISPATCH_STOP_LOCAL_REC' }, '*');
 
-    // Lớp 1: Kiểm tra xem hộp thoại xác nhận Dừng đã mở sẵn trên màn hình chưa
+    // 2. Lớp 1: Kiểm tra xem hộp thoại xác nhận Dừng đã mở sẵn trên màn hình chưa
     let confirmBtn = findStopConfirmationButton();
     if (confirmBtn) {
       console.log('[AutoMeet] Tìm thấy nút xác nhận Dừng trên dialog đang mở, bấm xác nhận...');
@@ -704,7 +733,7 @@
     const recIndicator = document.querySelector(
       '[data-testid="recording-indicator"], [data-testid="recording-label"], .recording-icon, .recording-label, [aria-label*="Recording" i], [aria-label*="Đang ghi" i], [aria-label*="Ghi hình" i]'
     );
-    if (recIndicator && !recIndicator.closest('#automeet-hud-container, .automeet-toast')) {
+    if (recIndicator && !recIndicator.closest('.automeet-toast, #automeet-rec-pill')) {
       console.log('[AutoMeet] Bấm vào biểu tượng Recording Indicator trên màn hình...');
       simulateUserClick(recIndicator);
       await sleep(500);
@@ -717,69 +746,45 @@
       }
     }
 
-    // Lớp 3: Tìm mục Dừng/Record trong menu (mở menu nếu chưa mở)
-    let stopItem = findRecordMenuItem();
-    if (!stopItem) {
-      wakeUpToolbar();
-      let moreBtn = null;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        moreBtn = findMoreActionsButton();
-        if (moreBtn) break;
-        await sleep(350);
-      }
+    // Lớp 3: Tìm mục Dừng/Record trong menu 3 chấm
+    wakeUpToolbar();
+    let moreBtn = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      moreBtn = findMoreActionsButton();
+      if (moreBtn) break;
+      await sleep(350);
+    }
 
-      if (moreBtn) {
-        console.log('[AutoMeet] Đang mở menu 3 chấm để tìm mục Dừng Record...');
-        simulateUserClick(moreBtn);
+    if (moreBtn) {
+      console.log('[AutoMeet] Đang mở menu 3 chấm để tìm mục Dừng Record...');
+      simulateUserClick(moreBtn);
+      await sleep(400);
 
-        for (let attempt = 0; attempt < 8; attempt++) {
+      let stopItem = findRecordMenuItem();
+      const stopSpecificItem = Array.from(document.querySelectorAll('div[class*="contextMenuItem"], [role="menuitem"], [role="button"]')).find(item => {
+        if (item.closest('.automeet-toast, #new-toolbox')) return false;
+        const text = (item.textContent || '').trim().toLowerCase();
+        const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+        return (text.includes('stop') || aria.includes('stop') || text.includes('dừng') || aria.includes('dừng')) && text.length < 35;
+      });
+
+      if (stopSpecificItem) stopItem = stopSpecificItem;
+
+      if (stopItem) {
+        console.log('[AutoMeet] Đang bấm mục Record/Stop recording trong menu...');
+        simulateUserClick(stopItem);
+        await sleep(500);
+
+        for (let attempt = 0; attempt < 10; attempt++) {
+          confirmBtn = findStopConfirmationButton();
+          if (confirmBtn) {
+            console.log('[AutoMeet] Phát hiện nút xác nhận Dừng, đang bấm...');
+            simulateUserClick(confirmBtn);
+            break;
+          }
           await sleep(250);
-          stopItem = findRecordMenuItem();
-          if (stopItem) break;
         }
       }
-    }
-
-    // Ưu tiên kiểm tra nếu có item chuyên biệt chứa từ khóa 'stop' hoặc 'dừng'
-    const stopSpecificItem = Array.from(document.querySelectorAll('div[class*="contextMenuItem"], [role="menuitem"], [role="button"]')).find(item => {
-      if (item.closest('#automeet-hud-container, .automeet-toast, #new-toolbox')) return false;
-      const text = (item.textContent || '').trim().toLowerCase();
-      const aria = (item.getAttribute('aria-label') || '').toLowerCase();
-      return (text.includes('stop') || aria.includes('stop') || text.includes('dừng') || aria.includes('dừng')) && text.length < 35;
-    });
-
-    if (stopSpecificItem) {
-      stopItem = stopSpecificItem;
-    }
-
-    if (stopItem) {
-      console.log('[AutoMeet] Đang bấm mục Record/Stop recording trong menu...');
-      simulateUserClick(stopItem);
-      await sleep(600);
-
-      // Chờ hộp thoại xác nhận Dừng xuất hiện (tối đa 2.5s)
-      for (let attempt = 0; attempt < 10; attempt++) {
-        confirmBtn = findStopConfirmationButton();
-        if (confirmBtn) {
-          console.log('[AutoMeet] Phát hiện nút xác nhận Dừng, đang bấm...');
-          simulateUserClick(confirmBtn);
-          break;
-        }
-        await sleep(250);
-      }
-    }
-
-    // Lớp 5: Thử gọi trực tiếp Jitsi internal recordingManager nếu có
-    try {
-      const rm = window.APP?.conference?._room?.recordingManager;
-      if (rm && rm._sessions) {
-        const sids = Object.keys(rm._sessions);
-        for (const sid of sids) {
-          rm.stopRecording(sid);
-        }
-      }
-    } catch (e) {
-      console.log('[AutoMeet] Gọi rm.stopRecording:', e);
     }
 
     finishStopRecording();

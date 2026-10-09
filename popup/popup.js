@@ -84,27 +84,51 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // 6. Sự kiện Bật Record thủ công
+  // 6. Sự kiện Bật Record thủ công (Ưu tiên gửi trực tiếp vào tab Jitsi để kích hoạt Local Recording)
   document.getElementById('btn-manual-record')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-manual-record');
     btn.textContent = '⏳ Đang bật...';
-    chrome.runtime.sendMessage({ action: 'TRIGGER_RECORD_NOW' }, () => {
-      setTimeout(() => {
-        btn.textContent = '⏺ Bật Record';
-        updateStatus(settings);
-      }, 1500);
+    
+    chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'START_RECORDING' }, () => {
+          setTimeout(() => {
+            btn.textContent = '⏺ Bật Record';
+            updateStatus(settings);
+          }, 1500);
+        });
+      } else {
+        chrome.runtime.sendMessage({ action: 'TRIGGER_RECORD_NOW' }, () => {
+          setTimeout(() => {
+            btn.textContent = '⏺ Bật Record';
+            updateStatus(settings);
+          }, 2000);
+        });
+      }
     });
   });
 
-  // 7. Sự kiện Dừng Record thủ công
+  // 7. Sự kiện Dừng Record thủ công (Gửi lệnh dừng Jitsi Local Recording)
   document.getElementById('btn-manual-stop')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-manual-stop');
     btn.textContent = '⏳ Đang dừng...';
-    chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, () => {
-      setTimeout(() => {
-        btn.textContent = '⏹ Dừng Record';
-        updateStatus(settings);
-      }, 1500);
+    
+    chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'STOP_RECORDING' }, () => {
+          setTimeout(() => {
+            btn.textContent = '⏹ Dừng Record';
+            updateStatus(settings);
+          }, 1500);
+        });
+      } else {
+        chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, () => {
+          setTimeout(() => {
+            btn.textContent = '⏹ Dừng Record';
+            updateStatus(settings);
+          }, 1500);
+        });
+      }
     });
   });
 
@@ -193,18 +217,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (badgeLabel) badgeLabel.textContent = 'Thủ công';
       if (badgeDot) badgeDot.className = 'dot-idle';
       if (nextEventEl) nextEventEl.textContent = 'Tự động Record: ĐÃ TẮT (Chỉ Record khi bấm nút)';
-      return;
-    }
-
-    if (slotInfo.inSlot) {
-      if (badgeLabel) badgeLabel.textContent = slotInfo.activeSchedule.name;
-      if (badgeDot) badgeDot.className = 'dot-rec';
+    } else if (slotInfo.inSlot) {
+      if (badgeLabel) badgeLabel.textContent = `Trong ca (${slotInfo.activeSchedule.name})`;
+      if (badgeDot) badgeDot.className = 'dot-idle';
     } else {
       if (badgeLabel) badgeLabel.textContent = 'Chờ ca';
       if (badgeDot) badgeDot.className = 'dot-idle';
     }
 
-    if (nextEventEl) {
+    if (nextEventEl && curSettings?.enableAutoRecord) {
       if (nextEvt) {
         const action = nextEvt.type === 'start' ? 'Bật' : 'Tắt';
         const hours = Math.floor(nextEvt.minutesLeft / 60);
@@ -216,13 +237,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    try {
-      chrome.runtime.sendMessage({ action: 'GET_BACKGROUND_STATE' }, (res) => {
-        if (res && res.isScheduleActive) {
-          if (badgeLabel) badgeLabel.textContent = res.activeSchedule ? `Đang Record (${res.activeSchedule.name})` : 'Đang Record';
-          if (badgeDot) badgeDot.className = 'dot-rec';
-        }
-      });
-    } catch (e) {}
+    // Truy vấn trạng thái thực tế từ tab Jitsi Meet: Chỉ hiển thị chấm đỏ REC khi Jitsi đang thực sự ghi hình
+    chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'GET_STATUS' }, (res) => {
+          if (res && res.isRecording) {
+            if (badgeLabel) badgeLabel.textContent = '🔴 Đang Record (Jitsi Local)';
+            if (badgeDot) badgeDot.className = 'dot-rec';
+          }
+        });
+      }
+    });
   }
 });
