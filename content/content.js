@@ -70,6 +70,7 @@
 
     checkTimer = setInterval(() => {
       handlePrejoinScreen();
+      autoDismissPopups();
       checkRecordingState();
       checkSlotScheduleAutoRecord();
       updateHUD();
@@ -77,7 +78,20 @@
   }
 
   /**
-   * Tự động điền tên và bấm nút tham gia nếu gặp màn hình Pre-join
+   * Tự động tắt các thông báo / banner che khuất màn hình (như "Invite others", "Dismiss", v.v.)
+   */
+  function autoDismissPopups() {
+    const dismissBtns = Array.from(document.querySelectorAll(
+      'button[aria-label="Dismiss"], button[aria-label="Đóng"], button[aria-label="Close"], .close-btn, [data-testid="notifications.dismiss"]'
+    )).filter(b => !b.closest('#automeet-hud-container, .automeet-toast, [role="dialog"]'));
+
+    dismissBtns.forEach(btn => {
+      try { btn.click(); } catch(e) {}
+    });
+  }
+
+  /**
+   * Tự động điền tên và bấm nút tham gia nếu gặp màn hình Pre-join (100% tự động)
    */
   function handlePrejoinScreen() {
     // 1. Điền tên hiển thị
@@ -93,12 +107,26 @@
     }
 
     // 2. Bấm nút Tham gia
-    const joinBtn = document.querySelector(
-      '[data-testid="prejoin.joinMeeting"], button.prejoin-btn, button[aria-label*="Join meeting" i], button[aria-label*="Tham gia" i]'
-    );
-    if (joinBtn && currentSettings?.autoJoinPrejoin) {
-      console.log('[AutoMeet] Phát hiện nút Join meeting, đang bấm...');
-      joinBtn.click();
+    const joinSelectors = [
+      '[data-testid="prejoin.joinMeeting"]',
+      'button.prejoin-btn',
+      'button[aria-label*="Join meeting" i]',
+      'button[aria-label*="Tham gia" i]',
+      '[data-testid="prejoin.joinWithoutAudio"]',
+      '.prejoin-input-area button[type="submit"]',
+      'button[aria-label*="Join without" i]'
+    ];
+
+    if (currentSettings?.autoJoinPrejoin) {
+      for (const sel of joinSelectors) {
+        const joinBtn = document.querySelector(sel);
+        if (joinBtn && joinBtn.offsetParent !== null) {
+          console.log('[AutoMeet] Phát hiện nút Join meeting, tự động bấm...');
+          simulateUserClick(joinBtn);
+          joinBtn.click();
+          break;
+        }
+      }
     }
   }
 
@@ -401,30 +429,57 @@
     }
 
     if (startBtn) {
-      highlightStartButton(startBtn);
+      await autoConfirmStartRecording(startBtn);
     } else {
       playNotificationSound();
-      showToast('👉 Vui lòng bấm nút Start trong bảng Record để bắt đầu ghi hình!');
+      showToast('👉 Đang kiểm tra luồng ghi âm...');
     }
   }
 
   /**
-   * Làm nổi bật nút Start màu xanh để người dùng bấm kích hoạt cấp quyền trình duyệt
+   * Tự động xác nhận Bật Record 100% không cần người dùng nhấn tay
    */
-  function highlightStartButton(startBtn) {
-    startBtn.style.outline = '4px solid #38bdf8';
-    startBtn.style.boxShadow = '0 0 35px rgba(56, 189, 248, 1)';
-    startBtn.style.transform = 'scale(1.08)';
-    startBtn.style.transition = 'all 0.3s ease';
-    startBtn.focus();
+  async function autoConfirmStartRecording(startBtn) {
+    if (!startBtn) return;
+    console.log('[AutoMeet] Tự động xác nhận Bật Record, đang bấm nút Start...');
+    showToast('⚡ Tự động xác nhận Bật Record...');
 
-    // Lắng nghe khi người dùng bấm nút Start thật
-    startBtn.addEventListener('click', () => {
-      showToast('📁 Trình duyệt đang mở cửa sổ... Hãy chọn nơi lưu file và bấm Cho phép (Allow) để bắt đầu!');
-    }, { once: true });
+    // 1. Tự động tích chọn checkbox đồng ý nếu có
+    const consentBoxes = document.querySelectorAll(
+      'input[type="checkbox"][id*="consent" i], input[type="checkbox"][name*="consent" i], input[type="checkbox"][data-testid*="consent" i]'
+    );
+    consentBoxes.forEach(cb => {
+      if (!cb.checked) {
+        cb.click();
+        cb.checked = true;
+      }
+    });
+
+    await sleep(200);
+
+    // 2. Click nút Start
+    simulateUserClick(startBtn);
+    startBtn.click();
+
+    // 3. Tự động kiểm tra và bấm xác nhận các hộp thoại phát sinh tiếp theo
+    for (let i = 0; i < 6; i++) {
+      await sleep(350);
+      const confirmNext = Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
+        if (b.closest('#automeet-hud-container, .automeet-toast')) return false;
+        const text = (b.textContent || '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return text === 'confirm' || text === 'xác nhận' || text === 'continue' || text === 'tiếp tục' || text === 'ok';
+      });
+      if (confirmNext) {
+        console.log('[AutoMeet] Tự động bấm xác nhận tiếp theo:', confirmNext.textContent);
+        simulateUserClick(confirmNext);
+        confirmNext.click();
+        break;
+      }
+    }
 
     playNotificationSound();
-    showToast('👉 Bấm nút START màu xanh ở giữa màn hình để mở cửa sổ chọn nơi lưu & cấp quyền trình duyệt!');
+    showToast('🎥 ĐÃ TỰ ĐỘNG BẬT VÀ XÁC NHẬN RECORD THÀNH CÔNG!');
   }
 
   /**

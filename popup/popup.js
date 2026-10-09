@@ -215,5 +215,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         nextEventEl.textContent = 'Không có lịch trình nào đang bật';
       }
     }
+
+    try {
+      chrome.runtime.sendMessage({ action: 'GET_BACKGROUND_STATE' }, (res) => {
+        if (res && res.isScheduleActive) {
+          if (badgeLabel) badgeLabel.textContent = res.activeSchedule ? `Đang Record (${res.activeSchedule.name})` : 'Đang Record';
+          if (badgeDot) badgeDot.className = 'dot-rec';
+        }
+      });
+    } catch (e) {}
   }
 });

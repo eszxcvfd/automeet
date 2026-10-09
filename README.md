@@ -55,56 +55,45 @@ Extension tương thích với tất cả trình duyệt nền Chromium (Google 
 
 ---
 
-## 💻 4. Cách Hoạt Động & Cơ Chế Xử Lý Record
+## 💻 4. Cách Hoạt Động & Cơ Chế Xử Lý Hoàn Toàn Tự Động (100% Không Cần Người Dùng Can Thiệp)
 
-### 4.1. Điều hướng và Vượt Pre-join tự động
-- Khi người dùng truy cập `https://meet.jit.si/`, Extension sẽ tự tính toán tên phòng hôm nay và tự động chuyển hướng vào `https://meet.jit.si/Staff...#config.prejoinConfig.enabled=false`.
-- Nếu Jitsi xuất hiện màn hình chờ (Pre-join screen), Extension tự động điền Tên hiển thị (Display Name) và tự động click nút **"Join meeting"** để vào phòng ngay lập tức.
+### 4.1. Mở trình duyệt là tự động chạy theo lịch
+- Bất kể bạn mở trình duyệt vào lúc nào:
+  - Nếu thời điểm mở nằm trong bất kỳ khung giờ ca trực nào (`07:30 - 11:30`, `13:00 - 17:00`, `22:00 - 24:00`), Extension sẽ **tự động mở tab phòng họp hôm nay** (`Staff...`).
+  - Tự động điền tên hiển thị và tự động click nút **Join meeting** vượt qua màn hình Pre-join.
+- Nếu bạn mở trình duyệt trước giờ ca hoặc để máy chạy qua đêm:
+  - Cứ đến đúng giờ bắt đầu ca, Extension sẽ tự động mở cuộc họp và kích hoạt ghi hình.
+  - Đến giờ kết thúc ca, Extension tự động dừng ghi hình và lưu video về máy tính.
 
-### 4.2. Quá trình Bật / Tắt Record
-1. **Đến giờ Bật**:
-   - Extension tìm và click nút **3 chấm (`...`)** ở thanh công cụ phía dưới màn hình phòng họp.
-   - Menu mở ra, Extension tự động tìm và click mục **Record** (có biểu tượng chấm tròn).
-   - Phát âm thanh chuông báo và hiển thị thông báo trạng thái.
-2. **Đến giờ Tắt**:
-   - Extension mở lại menu và chọn **Stop recording** -> xác nhận dừng.
-   - Jitsi Meet sẽ tự động đóng gói file video `.webm` và lưu trực tiếp về máy tính (thư mục Downloads).
-
----
-
-## ⚡ 5. Chế Độ Tự Động 100% Không Cần Người Bấm "Allow"
-
-Khi Jitsi kích hoạt tính năng Record cục bộ (Local Recording), trình duyệt Chrome theo chính sách bảo mật mặc định sẽ hiện popup:
-> *"Allow meet.jit.si to see this tab?"* $\rightarrow$ Nút **Allow**.
-
-Để hệ thống có thể **chạy hoàn toàn tự động 24/7 mà không cần người ngồi bấm nút "Allow"**:
-- **Trên Linux / macOS**: Chạy script:
-  ```bash
-  cd /home/trung/Documents/2026/work/automeet
-  ./scripts/start-chrome-auto.sh
-  ```
-- **Trên Windows**: Nhấp đúp vào file:
-  ```cmd
-  scripts\start-chrome-auto.bat
-  ```
-
-*Script này sẽ khởi chạy Chrome kèm 2 cờ `--auto-select-desktop-capture-source="Jitsi Meet" --use-fake-ui-for-media-stream`, giúp Chrome tự động chọn tab Jitsi và tự động chấp thuận (Auto-Allow) ngay lập tức.*
+### 4.2. Cơ chế Ghi hình kép (Dual-Engine Recording)
+Extension kết hợp 2 tầng ghi hình mạnh mẽ:
+1. **Engine 1 - Tự động điều khiển Jitsi UI (Auto Confirm)**:
+   - Tự mở menu 3 chấm, click **Record**.
+   - Tự động tích chọn checkbox đồng ý (Consent) và **tự động click nút Start** mà không chờ người dùng nhấn tay.
+   - Khi hết ca, tự động bấm Stop và tự động xác nhận hộp thoại kết thúc.
+2. **Engine 2 - Tab Audio/Video Capture ngầm (Offscreen Document)**:
+   - Sử dụng API `chrome.tabCapture` và `chrome.offscreen` trong Manifest V3 để thu trực tiếp toàn bộ luồng âm thanh & hình ảnh của tab cuộc họp.
+   - **Hoàn toàn không mở popup xin quyền màn hình, không mở hộp thoại chọn tab, không cần bất kỳ thao tác click nào từ con người.**
+   - Khi kết thúc ca, video `.webm` chất lượng cao sẽ được tải tự động thẳng vào thư mục `Downloads/AutoMeet/` với cờ `saveAs: false` (không hiện hộp thoại hỏi nơi lưu file).
 
 ---
 
-## 📂 6. Cấu Trúc Mã Nguồn
+## 📂 5. Cấu Trúc Mã Nguồn
 
 ```
 automeet/
-├── manifest.json            # Cấu hình Manifest V3
+├── manifest.json            # Cấu hình Manifest V3 (tabCapture, offscreen, downloads)
 ├── utils.js                 # Tính toán phòng theo ISO 8601, xử lý thời gian & lưu trữ
-├── background.js            # Service worker lập lịch Chrome Alarms & điều phối Tab
+├── background.js            # Service worker lập lịch tự động, điều phối Tab & TabCapture
+├── offscreen/
+│   ├── offscreen.html       # Container tài liệu ngầm (Offscreen Document)
+│   └── offscreen.js         # Xử lý ghi âm thanh + hình ảnh tab qua MediaRecorder
 ├── content/
-│   ├── content.js           # Điều khiển giao diện Jitsi Meet (vượt pre-join, bấm menu, record)
+│   ├── content.js           # Điều khiển giao diện Jitsi Meet (vượt pre-join, tự click Record & Start)
 │   └── content.css          # Giao diện widget HUD nổi trên phòng họp
 ├── popup/
 │   ├── popup.html           # Giao diện bảng điều khiển nhanh
-│   └── popup.js             # Logic xử lý giao diện popup
+│   └── popup.js             # Logic xử lý giao diện popup & trạng thái trực tiếp
 ├── options/
 │   ├── options.html         # Trang cài đặt tùy chỉnh ca trực & thông số
 │   └── options.js           # Logic lưu cấu hình
