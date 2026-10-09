@@ -1,6 +1,7 @@
 /**
  * AutoMeet - Popup Script
  * Hiển thị thông tin phòng hôm nay, lịch trình và các nút điều khiển nhanh.
+ * Luôn đồng bộ trạng thái thực tế từ tab Jitsi Meet (Local Recording).
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -43,7 +44,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       settings.enableAutoRecord = enabled;
       settings.autoRecordIfInSlot = enabled;
 
-      // Nếu bật master mà chưa có ca nào bật, tự động bật cả 3 ca mặc định
       if (enabled && !settings.schedules?.some(s => s.enabled)) {
         settings.schedules?.forEach(s => { s.enabled = true; });
       }
@@ -57,8 +57,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   renderSchedules(settings.schedules);
 
-  // 3. Cập nhật trạng thái từ background
+  // 3. Cập nhật trạng thái định kỳ mỗi giây khi mở popup
   updateStatus(settings);
+  const statusInterval = setInterval(() => {
+    updateStatus(settings);
+  }, 1000);
+
+  window.addEventListener('unload', () => {
+    clearInterval(statusInterval);
+  });
 
   // 4. Sự kiện Sao chép tên phòng
   document.getElementById('btn-copy-room')?.addEventListener('click', async () => {
@@ -88,23 +95,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btn-manual-record')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-manual-record');
     btn.textContent = '⏳ Đang bật...';
+    btn.disabled = true;
 
-    chrome.runtime.sendMessage({ action: 'TRIGGER_RECORD_NOW' }, () => {
+    chrome.runtime.sendMessage({ action: 'TRIGGER_RECORD_NOW' }, (res) => {
       setTimeout(() => {
+        btn.disabled = false;
         btn.textContent = '⏺ Bật Record';
         updateStatus(settings);
-      }, 1500);
+      }, 1200);
     });
   });
 
-  // 7. Sự kiện Dừng Record thủ công
+  // 7. Sự kiện Dừng & Lưu Record thủ công
   document.getElementById('btn-manual-stop')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-manual-stop');
-    btn.textContent = '⏳ Đang dừng...';
+    btn.textContent = '⏳ Đang lưu...';
+    btn.disabled = true;
 
-    chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, () => {
+    chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, (res) => {
       setTimeout(() => {
-        btn.textContent = '⏹ Dừng Record';
+        btn.disabled = false;
+        btn.textContent = '⏹ Dừng & Lưu Video';
         updateStatus(settings);
       }, 1000);
     });
@@ -127,9 +138,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.tabs.query({ url: '*://meet.jit.si/*' }, (tabs) => {
         tabs?.forEach(t => chrome.tabs.sendMessage(t.id, { action: 'RELOAD_SETTINGS' }));
       });
-    } catch (e) {
-      // bỏ qua lỗi
-    }
+    } catch (e) {}
   }
 
   /**
@@ -162,7 +171,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const idx = parseInt(e.target.dataset.index, 10);
         settings.schedules[idx].enabled = e.target.checked;
 
-        // Nếu bật ít nhất 1 ca thì tự động kích hoạt master switch
         const hasAnyEnabled = settings.schedules.some(s => s.enabled);
         if (hasAnyEnabled && !settings.enableAutoRecord) {
           settings.enableAutoRecord = true;
@@ -181,30 +189,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Cập nhật trạng thái mốc thời gian tiếp theo
+   * Cập nhật trạng thái hiển thị
    */
   function updateStatus(curSettings) {
     const nextEventEl = document.getElementById('popup-next-event');
     const badgeLabel = document.getElementById('popup-badge-label');
-    const badgeDot = document.querySelector('#popup-active-badge span:first-child');
+    const badgeDot = document.getElementById('popup-status-dot');
 
     const slotInfo = utils.checkCurrentSlot(curSettings?.schedules);
     const nextEvt = utils.getNextEvent(curSettings?.schedules);
 
-    if (!curSettings?.enableAutoRecord) {
-      if (badgeLabel) badgeLabel.textContent = 'Thủ công';
-      if (badgeDot) badgeDot.className = 'dot-idle';
-      if (nextEventEl) nextEventEl.textContent = 'Tự động Record: ĐÃ TẮT (Chỉ Record khi bấm nút)';
-    } else if (slotInfo.inSlot) {
-      if (badgeLabel) badgeLabel.textContent = `Trong ca (${slotInfo.activeSchedule.name})`;
-      if (badgeDot) badgeDot.className = 'dot-idle';
-    } else {
-      if (badgeLabel) badgeLabel.textContent = 'Chờ ca';
-      if (badgeDot) badgeDot.className = 'dot-idle';
-    }
-
-    if (nextEventEl && curSettings?.enableAutoRecord) {
-      if (nextEvt) {
+    // Tính mốc tiếp theo
+    if (nextEventEl) {
+      if (!curSettings?.enableAutoRecord) {
+        nextEventEl.textContent = 'Tự động Record: ĐÃ TẮT';
+      } else if (nextEvt) {
         const action = nextEvt.type === 'start' ? 'Bật' : 'Tắt';
         const hours = Math.floor(nextEvt.minutesLeft / 60);
         const mins = nextEvt.minutesLeft % 60;
@@ -215,11 +214,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // Truy vấn trạng thái thực tế từ background
+    // Truy vấn trạng thái thực tế từ background và tab Jitsi
     chrome.runtime.sendMessage({ action: 'GET_BACKGROUND_STATE' }, (res) => {
-      if (res && res.isRecording) {
-        if (badgeLabel) badgeLabel.textContent = '🔴 Đang Record (TabCapture)';
+      if (chrome.runtime.lastError || !res) {
+        if (badgeLabel) badgeLabel.textContent = 'Chưa vào phòng';
+        if (badgeDot) badgeDot.className = 'dot-idle';
+        return;
+      }
+
+      if (res.isRecording) {
+        let timerStr = '';
+        if (typeof res.durationSec === 'number' && res.durationSec > 0) {
+          const m = String(Math.floor(res.durationSec / 60)).padStart(2, '0');
+          const s = String(res.durationSec % 60).padStart(2, '0');
+          timerStr = ` [${m}:${s}]`;
+        }
+        if (badgeLabel) badgeLabel.textContent = `🔴 Đang Record${timerStr}`;
         if (badgeDot) badgeDot.className = 'dot-rec';
+      } else if (res.hasMeetingTab) {
+        if (slotInfo.inSlot && slotInfo.activeSchedule) {
+          if (badgeLabel) badgeLabel.textContent = `🟢 Sẵn sàng (${slotInfo.activeSchedule.name})`;
+          if (badgeDot) badgeDot.className = 'dot-ready';
+        } else {
+          if (badgeLabel) badgeLabel.textContent = 'Đã kết nối phòng (Chờ ca)';
+          if (badgeDot) badgeDot.className = 'dot-idle';
+        }
+      } else {
+        if (slotInfo.inSlot && slotInfo.activeSchedule) {
+          if (badgeLabel) badgeLabel.textContent = `Trong ca (${slotInfo.activeSchedule.name})`;
+          if (badgeDot) badgeDot.className = 'dot-idle';
+        } else {
+          if (badgeLabel) badgeLabel.textContent = 'Chờ ca trực';
+          if (badgeDot) badgeDot.className = 'dot-idle';
+        }
       }
     });
   }

@@ -12,7 +12,7 @@
     }
 
     body {
-      width: 350px;
+      width: 360px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background: #0f172a;
       color: #f8fafc;
@@ -238,6 +238,7 @@
 
     .status-text {
       color: #94a3b8;
+      font-size: 11px;
     }
 
     .status-badge {
@@ -245,19 +246,28 @@
       align-items: center;
       gap: 5px;
       font-weight: 600;
+      font-size: 12px;
     }
 
     .dot-rec {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       background: #ef4444;
       border-radius: 50%;
       animation: pulse 1.5s infinite;
+      box-shadow: 0 0 8px #ef4444;
+    }
+
+    .dot-ready {
+      width: 8px;
+      height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
     }
 
     .dot-idle {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       background: #64748b;
       border-radius: 50%;
     }
@@ -277,7 +287,7 @@
     }
 
     .btn-action {
-      padding: 8px 10px;
+      padding: 9px 10px;
       border-radius: 6px;
       font-size: 12px;
       font-weight: 600;
@@ -287,7 +297,7 @@
       align-items: center;
       justify-content: center;
       gap: 5px;
-      transition: opacity 0.2s;
+      transition: opacity 0.2s, background 0.2s;
     }
 
     .btn-record {
@@ -295,13 +305,23 @@
       color: #ffffff;
     }
 
-    .btn-stop {
-      background: #475569;
-      color: #ffffff;
+    .btn-record:hover {
+      background: #b91c1c;
     }
 
-    .btn-action:hover {
-      opacity: 0.9;
+    .btn-stop {
+      background: #334155;
+      color: #ffffff;
+      border: 1px solid #475569;
+    }
+
+    .btn-stop:hover {
+      background: #475569;
+    }
+
+    .btn-action:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     /* Footer */
@@ -329,7 +349,7 @@
   <div class="header">
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo">
-      <span class="brand-title">AutoMeet Jitsi</span>
+      <span class="brand-title">AutoMeet Jitsi Controller</span>
     </div>
     <div class="header-icons">
       <button id="btn-open-options" title="Cài đặt">
@@ -359,10 +379,10 @@
     </button>
   </div>
 
-  <!-- Card 2: Lịch trình Record -->
+  <!-- Card 2: Lịch trình & Trạng thái Record -->
   <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-      <span class="card-title" style="margin-bottom: 0;">Lịch trình tự động</span>
+      <span class="card-title" style="margin-bottom: 0;">Lịch tự động (Local Recording)</span>
       <label class="switch" title="Bật/Tắt chế độ tự động ghi hình theo lịch">
         <input type="checkbox" id="chk-master-auto-record">
         <span class="slider"></span>
@@ -374,24 +394,24 @@
     <div class="status-box">
       <span class="status-text" id="popup-next-event">Đang kiểm tra...</span>
       <span class="status-badge" id="popup-active-badge">
-        <span class="dot-idle"></span>
-        <span id="popup-badge-label">Chờ</span>
+        <span class="dot-idle" id="popup-status-dot"></span>
+        <span id="popup-badge-label">Chờ ca</span>
       </span>
     </div>
   </div>
 
-  <!-- Card 3: Thao tác thủ công -->
+  <!-- Card 3: Thao tác Bật/Dừng Record -->
   <div class="card">
-    <div class="card-title">Thao tác thủ công</div>
+    <div class="card-title">Điều khiển Ghi hình Cục bộ (Local)</div>
     <div class="actions-grid">
       <button class="btn-action btn-record" id="btn-manual-record">⏺ Bật Record</button>
-      <button class="btn-action btn-stop" id="btn-manual-stop">⏹ Dừng Record</button>
+      <button class="btn-action btn-stop" id="btn-manual-stop">⏹ Dừng & Lưu Video</button>
     </div>
   </div>
 
   <!-- Footer -->
   <div class="footer">
-    <span>Phiên bản 1.0.0</span>
+    <span>Lưu local: Thư mục Downloads</span>
     <a href="#" id="link-options">Cài đặt nâng cao</a>
   </div>
 

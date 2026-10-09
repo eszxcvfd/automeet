@@ -54,8 +54,6 @@
     "storage",
     "tabs",
     "notifications",
-    "tabCapture",
-    "offscreen",
     "downloads"
   ],
   "host_permissions": [

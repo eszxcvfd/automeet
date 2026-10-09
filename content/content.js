@@ -15,6 +15,7 @@
   let currentSettings = utils ? utils.DEFAULT_SETTINGS : null;
   let isRecordingActive = false;
   let recordingStartTime = null;
+  let recordingDurationSec = 0;
   let hudElement = null;
   let checkTimer = null;
   let isStartingRecording = false;
@@ -37,18 +38,36 @@
     // Lắng nghe sự kiện đồng bộ từ In-page script (chạy ở MAIN world qua manifest.json)
     window.addEventListener('message', (event) => {
       if (!event.data) return;
+
       if (event.data.type === 'AUTOMEET_SYNC_RECORDING_STATE') {
-        if (typeof event.data.isRunning === 'boolean') {
-          const wasRunning = isRecordingActive;
-          isRecordingActive = event.data.isRunning;
-          if (isRecordingActive && !wasRunning) {
-            if (!recordingStartTime) recordingStartTime = Date.now();
-            updateTopRecordingPill();
-          } else if (!isRecordingActive && wasRunning) {
-            recordingStartTime = null;
-            updateTopRecordingPill();
-          }
+        const wasRunning = isRecordingActive;
+        isRecordingActive = Boolean(event.data.isRunning);
+        recordingDurationSec = event.data.durationSec || 0;
+
+        if (isRecordingActive && !wasRunning) {
+          if (!recordingStartTime) recordingStartTime = Date.now();
+          playNotificationSound();
+          showToast('🔴 ĐÃ BẬT RECORD! Nền tảng Jitsi đang ghi hình (Lưu về Downloads khi hết ca).');
+        } else if (!isRecordingActive && wasRunning) {
+          recordingStartTime = null;
+          recordingDurationSec = 0;
         }
+
+        updateTopRecordingPill();
+        updateHUD();
+      } else if (event.data.type === 'AUTOMEET_FILE_RECORDED') {
+        console.log('[AutoMeet Content] Nhận được video vừa hoàn tất từ Inpage:', event.data.filename);
+        playNotificationSound();
+        showToast(`📁 ĐÃ LƯU VIDEO: ${event.data.filename} vào thư mục Downloads!`);
+
+        // Yêu cầu Background ghi file vào Downloads thông qua Chrome API
+        try {
+          chrome.runtime.sendMessage({
+            action: 'DOWNLOAD_RECORDING',
+            url: event.data.url,
+            filename: event.data.filename
+          });
+        } catch (e) {}
       }
     });
 
@@ -128,7 +147,7 @@
   }
 
   /**
-   * Tự động tắt các thông báo che khuất màn hình (như "Invite others", "Dismiss", thông báo Jitsi)
+   * Tự động tắt các thông báo che khuất màn hình
    */
   function autoDismissPopups() {
     const dismissBtns = Array.from(document.querySelectorAll(
@@ -266,13 +285,13 @@
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings.schedules);
 
     if (inSlot && activeSchedule) {
-      // Đang trong ca làm việc: nếu chưa ghi hình, kích hoạt ngầm qua background
+      // Đang trong ca làm việc: nếu chưa ghi hình, kích hoạt Local Recording
       if (!isRecordingActive && !isStartingRecording) {
         const now = Date.now();
-        if (now - lastRecordAttemptTime > 5000) {
+        if (now - lastRecordAttemptTime > 4000) {
           lastRecordAttemptTime = now;
           isStartingRecording = true;
-          console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Record...`);
+          console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Local Record...`);
 
           try {
             await triggerStartRecording(activeSchedule);
@@ -286,7 +305,7 @@
     } else {
       // Hết ca làm việc -> tự động dừng
       if (isRecordingActive && !isStoppingRecording) {
-        console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Record...`);
+        console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Local Record...`);
         isStoppingRecording = true;
         try {
           await triggerStopRecording();
@@ -316,7 +335,7 @@
   }
 
   /**
-   * Kích hoạt Record: Yêu cầu background bắt đầu TabCapture ngầm và đồng bộ giao diện Jitsi
+   * Kích hoạt Record: Gửi lệnh trực tiếp đến In-page script chạy ở MAIN world
    */
   async function triggerStartRecording(activeSchedule) {
     if (isPrejoinScreen()) {
@@ -329,34 +348,16 @@
 
     if (isRecordingActive) return;
 
-    console.log('[AutoMeet] Yêu cầu Background bắt đầu TabCapture...');
-    chrome.runtime.sendMessage({
-      action: 'START_TAB_CAPTURE',
-      schedule: activeSchedule
-    }, (response) => {
-      if (response && response.success) {
-        console.log('[AutoMeet] Background xác nhận TabCapture đã bắt đầu.');
-      } else {
-        console.warn('[AutoMeet] Background báo lỗi TabCapture:', response?.error);
-      }
-    });
+    console.log('[AutoMeet] Kích hoạt Local Recording của Jitsi...');
+    window.postMessage({ type: 'AUTOMEET_START_LOCAL_REC' }, '*');
   }
 
   /**
-   * Dừng Record: Yêu cầu background kết thúc TabCapture và lưu file
+   * Dừng Record: Gửi lệnh kết thúc đến In-page script
    */
   async function triggerStopRecording() {
-    console.log('[AutoMeet] Yêu cầu Background dừng TabCapture...');
-    chrome.runtime.sendMessage({ action: 'STOP_TAB_CAPTURE' }, () => {});
-  }
-
-  function finishStopRecording() {
-    isRecordingActive = false;
-    recordingStartTime = null;
-    updateHUD();
-    updateTopRecordingPill();
-    playNotificationSound();
-    showToast('⏹ ĐÃ DỪNG RECORD! Video đã được tự động lưu vào thư mục Downloads.');
+    console.log('[AutoMeet] Dừng Local Recording của Jitsi...');
+    window.postMessage({ type: 'AUTOMEET_STOP_LOCAL_REC' }, '*');
   }
 
   /**
@@ -397,7 +398,7 @@
           </div>
           <div class="automeet-hud-actions">
             <button class="automeet-btn automeet-btn-record" id="hud-btn-start">⏺ Bật Record</button>
-            <button class="automeet-btn automeet-btn-stop" id="hud-btn-stop">⏹ Dừng</button>
+            <button class="automeet-btn automeet-btn-stop" id="hud-btn-stop">⏹ Dừng & Lưu</button>
           </div>
         </div>
       </div>
@@ -519,7 +520,7 @@
       toast.style.opacity = '0';
       toast.style.transition = 'opacity 0.4s ease';
       setTimeout(() => toast.remove(), 400);
-    }, 4000);
+    }, 4500);
   }
 
   /**
@@ -557,23 +558,9 @@
     if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.onMessage) return;
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      console.log('[AutoMeet] Nhận lệnh từ background:', request);
+      console.log('[AutoMeet Content] Nhận lệnh từ background / popup:', request);
 
-      if (request.action === 'ON_RECORDING_STARTED') {
-        isRecordingActive = true;
-        recordingStartTime = Date.now();
-        window.postMessage({ type: 'AUTOMEET_SET_RECORDING_UI_ACTIVE' }, '*');
-        updateTopRecordingPill();
-        updateHUD();
-        playNotificationSound();
-        const schedName = request.schedule?.name || '';
-        showToast(`🔴 ĐÃ BẬT RECORD! Đang ghi hình ${schedName} (Lưu vào Downloads khi kết thúc)`);
-        sendResponse({ success: true });
-      } else if (request.action === 'ON_RECORDING_STOPPED') {
-        window.postMessage({ type: 'AUTOMEET_SET_RECORDING_UI_INACTIVE' }, '*');
-        finishStopRecording();
-        sendResponse({ success: true });
-      } else if (request.action === 'START_RECORDING') {
+      if (request.action === 'START_RECORDING') {
         triggerStartRecording(request.schedule);
         sendResponse({ success: true });
       } else if (request.action === 'STOP_RECORDING') {
@@ -582,6 +569,7 @@
       } else if (request.action === 'GET_STATUS') {
         sendResponse({
           isRecording: isRecordingActive,
+          durationSec: recordingDurationSec,
           roomName: utils ? utils.getRoomName() : '',
           settings: currentSettings
         });
