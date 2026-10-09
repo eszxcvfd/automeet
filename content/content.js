@@ -47,13 +47,13 @@
         if (isRecordingActive && !wasRunning) {
           if (!recordingStartTime) recordingStartTime = Date.now();
           playNotificationSound();
-          showToast('🔴 ĐÃ BẬT RECORD! Nền tảng Jitsi đang ghi hình (Lưu về Downloads khi hết ca).');
+          console.log('[AutoMeet] Đã bật Record! Nền tảng Jitsi đang ghi hình.');
         } else if (!isRecordingActive && wasRunning) {
           recordingStartTime = null;
           recordingDurationSec = 0;
         }
 
-        updateTopRecordingPill();
+        removeAnyOnScreenPills();
         updateHUD();
       } else if (event.data.type === 'AUTOMEET_FILE_RECORDED') {
         console.log('[AutoMeet Content] Nhận được video vừa hoàn tất từ Inpage:', event.data.filename);
@@ -116,36 +116,18 @@
       autoDismissPopups();
       checkSlotScheduleAutoRecord();
       updateHUD();
-      updateTopRecordingPill();
+      removeAnyOnScreenPills();
     }, 1500);
   }
 
   /**
-   * Cập nhật hoặc xóa chỉ báo REC nổi ở giữa trên cùng màn hình
+   * Đảm bảo không có bất kỳ banner hay pill popup nào che màn hình cuộc họp
    */
-  function updateTopRecordingPill() {
-    let pill = document.getElementById('automeet-rec-pill');
-    if (isRecordingActive) {
-      if (!pill) {
-        pill = document.createElement('div');
-        pill.id = 'automeet-rec-pill';
-        document.body.appendChild(pill);
-      }
-      let timerStr = '';
-      if (recordingStartTime) {
-        const elapsedSec = Math.floor((Date.now() - recordingStartTime) / 1000);
-        const m = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
-        const s = String(elapsedSec % 60).padStart(2, '0');
-        timerStr = ` [${m}:${s}]`;
-      }
-      const { inSlot, activeSchedule } = utils ? utils.checkCurrentSlot(currentSettings?.schedules) : { inSlot: false };
-      const caName = inSlot && activeSchedule ? ` - ${activeSchedule.name}` : '';
-      pill.innerHTML = `<span class="rec-dot"></span><span>REC ĐANG GHI HÌNH${timerStr}${caName} (Tự động lưu khi hết ca)</span>`;
-    } else {
-      if (pill) {
-        pill.remove();
-      }
-    }
+  function removeAnyOnScreenPills() {
+    const pill = document.getElementById('automeet-rec-pill');
+    if (pill) pill.remove();
+    const existingToasts = document.querySelectorAll('.automeet-toast');
+    existingToasts.forEach(t => t.remove());
   }
 
   /**
@@ -519,25 +501,12 @@
   }
 
   /**
-   * Hiển thị thông báo Toast nổi
+   * Log thông báo (Tuyệt đối không chèn popup/banner lên màn hình cuộc họp)
    */
   function showToast(msg) {
-    const existing = document.querySelector('.automeet-toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.className = 'automeet-toast';
-    toast.innerHTML = `
-      <span>🎥</span>
-      <span>${escapeHtml(msg)}</span>
-    `;
-    document.body.appendChild(toast);
-
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transition = 'opacity 0.4s ease';
-      setTimeout(() => toast.remove(), 400);
-    }, 4500);
+    console.log('[AutoMeet]', msg);
+    const existing = document.querySelectorAll('.automeet-toast, #automeet-rec-pill');
+    existing.forEach(el => el.remove());
   }
 
   /**
