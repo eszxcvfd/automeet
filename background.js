@@ -229,22 +229,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('[AutoMeet Background] Nhận action:', request.action);
 
   if (request.action === 'DOWNLOAD_RECORDING') {
-    // Tải file tự động vào Downloads (KHÔNG POPUP HỎI NƠI LƯU)
-    if (chrome.downloads && request.url) {
-      chrome.downloads.download({
-        url: request.url,
-        filename: request.filename || 'recording.webm',
-        saveAs: false,
-        conflictAction: 'uniquify'
-      }, (downloadId) => {
-        if (chrome.runtime.lastError) {
-          console.warn('[AutoMeet Background] Lỗi chrome.downloads:', chrome.runtime.lastError);
-        } else {
-          console.log('[AutoMeet Background] Đã bắt đầu tải file qua chrome.downloads, ID:', downloadId);
-        }
-      });
-    }
-    sendResponse({ success: true });
+    (async () => {
+      const settings = utils ? await utils.loadSettings() : null;
+      const subfolder = settings?.saveSubfolder || 'AutoMeet_Recordings';
+      const cleanFilename = request.filename || 'recording.webm';
+      const targetPath = `${subfolder}/${cleanFilename}`;
+
+      // Tự động lưu video vào thư mục người dùng đã chọn trước đó (KHÔNG POPUP HỎI NƠI LƯU)
+      if (chrome.downloads && request.url) {
+        chrome.downloads.download({
+          url: request.url,
+          filename: targetPath,
+          saveAs: false,
+          conflictAction: 'uniquify'
+        }, (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.warn('[AutoMeet Background] Lỗi chrome.downloads với đường dẫn con, thử tải mặc định:', chrome.runtime.lastError);
+            chrome.downloads.download({
+              url: request.url,
+              filename: cleanFilename,
+              saveAs: false
+            });
+          } else {
+            console.log('[AutoMeet Background] Đã tự động lưu video vào thư mục:', targetPath, 'ID:', downloadId);
+          }
+        });
+      }
+      sendResponse({ success: true });
+    })();
     return true;
   }
 

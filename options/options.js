@@ -26,6 +26,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (chkSound) chkSound.checked = !!settings.soundAlert;
   if (chkShowFloatingHud) chkShowFloatingHud.checked = !!settings.showFloatingHud;
 
+  const inputSaveFolder = document.getElementById('input-save-folder');
+  const storageHint = document.getElementById('options-storage-hint');
+  if (inputSaveFolder) {
+    inputSaveFolder.value = settings.saveLocationName || settings.saveSubfolder || 'AutoMeet_Recordings';
+  }
+
+  // Nút Chọn thư mục lưu trữ trong Options
+  document.getElementById('btn-options-pick-folder')?.addEventListener('click', async () => {
+    try {
+      if (typeof window.showDirectoryPicker === 'function') {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        if (dirHandle) {
+          await utils.saveDirectoryHandle(dirHandle);
+          if (inputSaveFolder) inputSaveFolder.value = dirHandle.name;
+          settings.saveLocationName = dirHandle.name;
+          settings.saveSubfolder = dirHandle.name;
+          await utils.saveSettings(settings);
+          if (storageHint) {
+            storageHint.textContent = `✓ Đã chọn và cấp quyền lưu vào thư mục: ${dirHandle.name}`;
+            storageHint.style.color = '#4ade80';
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.warn('Lỗi chọn thư mục:', err);
+      }
+    }
+  });
+
   // 2. Render danh sách lịch trình
   let schedules = JSON.parse(JSON.stringify(settings.schedules || []));
   renderTable(schedules);
@@ -60,6 +90,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
+    const folderName = inputSaveFolder ? (inputSaveFolder.value.trim() || 'AutoMeet_Recordings') : 'AutoMeet_Recordings';
+
     const newSettings = {
       displayName: inputDisplayName.value.trim() || 'Staff Member',
       enableAutoRecord: chkEnableAutoRecord.checked,
@@ -68,6 +100,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       notifyOnRecord: chkNotify.checked,
       soundAlert: chkSound.checked,
       showFloatingHud: chkShowFloatingHud ? chkShowFloatingHud.checked : false,
+      saveLocationName: folderName,
+      saveSubfolder: folderName,
       schedules: updatedSchedules
     };
 

@@ -324,6 +324,66 @@
       cursor: not-allowed;
     }
 
+    /* Storage Box */
+    .storage-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #090d16;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px 10px;
+      gap: 8px;
+    }
+
+    .storage-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+      flex: 1;
+    }
+
+    .storage-icon {
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .storage-path {
+      font-size: 12px;
+      color: #60a5fa;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn-storage {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid #38bdf8;
+      color: #38bdf8;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .btn-storage:hover {
+      background: #38bdf8;
+      color: #0f172a;
+    }
+
+    .storage-hint {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 6px;
+      line-height: 1.3;
+    }
+
     /* Footer */
     .footer {
       display: flex;
@@ -409,9 +469,22 @@
     </div>
   </div>
 
+  <!-- Card 4: Nơi lưu video ghi hình -->
+  <div class="card">
+    <div class="card-title">Nơi lưu video ghi hình (Local)</div>
+    <div class="storage-box">
+      <div class="storage-info">
+        <span class="storage-icon">📁</span>
+        <span class="storage-path" id="popup-storage-path">Downloads/AutoMeet_Recordings</span>
+      </div>
+      <button class="btn-storage" id="btn-pick-folder" title="Mở cửa sổ chọn thư mục lưu trữ video">📂 Chọn thư mục...</button>
+    </div>
+    <div class="storage-hint" id="popup-storage-hint">Video sau khi ghi sẽ tự động lưu thẳng vào đây, không hỏi lại.</div>
+  </div>
+
   <!-- Footer -->
   <div class="footer">
-    <span>Lưu local: Thư mục Downloads</span>
+    <span id="popup-footer-text">Lưu local: Thư mục Downloads</span>
     <a href="#" id="link-options">Cài đặt nâng cao</a>
   </div>
 

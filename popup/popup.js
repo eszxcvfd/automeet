@@ -1,6 +1,6 @@
 /**
  * AutoMeet - Popup Script
- * Hiển thị thông tin phòng hôm nay, lịch trình và các nút điều khiển nhanh.
+ * Hiển thị thông tin phòng hôm nay, lịch trình, nơi lưu trữ video và điều khiển.
  * Luôn đồng bộ trạng thái thực tế từ tab Jitsi Meet (Local Recording).
  */
 
@@ -34,6 +34,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 2. Tải và hiển thị danh sách lịch trình
   let settings = await utils.loadSettings();
+
+  // Cập nhật thông tin nơi lưu trữ
+  updateStorageDisplay(settings);
 
   // Khởi tạo công tắc tổng Tự động Record
   const masterSwitch = document.getElementById('chk-master-auto-record');
@@ -92,36 +95,73 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 6. Sự kiện Bật Record thủ công
-  document.getElementById('btn-manual-record')?.addEventListener('click', () => {
-    const btn = document.getElementById('btn-manual-record');
-    btn.textContent = '⏳ Đang bật...';
-    btn.disabled = true;
+  const btnRecord = document.getElementById('btn-manual-record');
+  const btnStop = document.getElementById('btn-manual-stop');
+
+  btnRecord?.addEventListener('click', () => {
+    btnRecord.textContent = '⏳ Đang kích hoạt...';
+    btnRecord.disabled = true;
 
     chrome.runtime.sendMessage({ action: 'TRIGGER_RECORD_NOW' }, (res) => {
       setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = '⏺ Bật Record';
-        updateStatus(settings);
-      }, 1200);
-    });
-  });
-
-  // 7. Sự kiện Dừng & Lưu Record thủ công
-  document.getElementById('btn-manual-stop')?.addEventListener('click', () => {
-    const btn = document.getElementById('btn-manual-stop');
-    btn.textContent = '⏳ Đang lưu...';
-    btn.disabled = true;
-
-    chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, (res) => {
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = '⏹ Dừng & Lưu Video';
         updateStatus(settings);
       }, 1000);
     });
   });
 
-  // 8. Mở trang Cài đặt (Options)
+  // 7. Sự kiện Dừng & Lưu Record thủ công
+  btnStop?.addEventListener('click', () => {
+    btnStop.textContent = '⏳ Đang dừng & lưu...';
+    btnStop.disabled = true;
+
+    chrome.runtime.sendMessage({ action: 'TRIGGER_STOP_NOW' }, (res) => {
+      setTimeout(() => {
+        updateStatus(settings);
+      }, 1000);
+    });
+  });
+
+  // 8. Sự kiện Chọn thư mục lưu trữ video (Cấp quyền trước 1 lần)
+  document.getElementById('btn-pick-folder')?.addEventListener('click', async () => {
+    const hintEl = document.getElementById('popup-storage-hint');
+    try {
+      if (typeof window.showDirectoryPicker === 'function') {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        if (dirHandle) {
+          // Lưu handle vào IndexedDB
+          await utils.saveDirectoryHandle(dirHandle);
+
+          // Lưu tên thư mục vào chrome.storage
+          settings.saveLocationName = dirHandle.name;
+          settings.saveSubfolder = dirHandle.name;
+          await utils.saveSettings(settings);
+
+          updateStorageDisplay(settings);
+          notifyMeetingTabs();
+          console.log('[AutoMeet Popup] Đã chọn thư mục lưu trữ:', dirHandle.name);
+        }
+      } else {
+        const customName = prompt('Nhập tên thư mục con trong Downloads để lưu video:', settings.saveSubfolder || 'AutoMeet_Recordings');
+        if (customName && customName.trim()) {
+          settings.saveLocationName = customName.trim();
+          settings.saveSubfolder = customName.trim();
+          await utils.saveSettings(settings);
+          updateStorageDisplay(settings);
+          notifyMeetingTabs();
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.warn('[AutoMeet Popup] Lỗi chọn thư mục:', err);
+        if (hintEl) {
+          hintEl.textContent = '⚠️ Chưa thể truy cập thư mục: ' + err.message;
+          hintEl.style.color = '#f87171';
+        }
+      }
+    }
+  });
+
+  // 9. Mở trang Cài đặt (Options)
   document.getElementById('btn-open-options')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
@@ -129,6 +169,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     chrome.runtime.openOptionsPage();
   });
+
+  /**
+   * Cập nhật hiển thị thư mục lưu trữ
+   */
+  function updateStorageDisplay(curSettings) {
+    const pathEl = document.getElementById('popup-storage-path');
+    const hintEl = document.getElementById('popup-storage-hint');
+    const footerEl = document.getElementById('popup-footer-text');
+
+    const folderName = curSettings?.saveLocationName || curSettings?.saveSubfolder || 'Downloads/AutoMeet_Recordings';
+    if (pathEl) {
+      pathEl.textContent = `${folderName}`;
+      pathEl.title = `Thư mục lưu trữ: ${folderName}`;
+    }
+    if (hintEl) {
+      hintEl.textContent = `✓ Đã chọn nơi lưu: ${folderName}. Video tự động lưu về đây khi hết ca.`;
+      hintEl.style.color = '#38bdf8';
+    }
+    if (footerEl) {
+      footerEl.textContent = `Lưu tại: ${folderName}`;
+    }
+  }
 
   /**
    * Đồng bộ cài đặt mới đến các tab Jitsi đang mở
@@ -193,7 +255,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Cập nhật trạng thái hiển thị
+   * Cập nhật trạng thái hiển thị trung thực 100%
    */
   function updateStatus(curSettings) {
     const nextEventEl = document.getElementById('popup-next-event');
@@ -214,7 +276,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const remainingStr = hours > 0 ? `${hours}h ${mins}p` : `${mins} phút`;
         nextEventEl.textContent = `${action} lúc ${nextEvt.timeStr} (sau ${remainingStr})`;
       } else {
-        nextEventEl.textContent = 'Không có lịch trình nào đang bật';
+        nextEventEl.textContent = 'Không có ca nào đang bật';
       }
     }
 
@@ -223,10 +285,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (chrome.runtime.lastError || !res) {
         if (badgeLabel) badgeLabel.textContent = 'Chưa vào phòng';
         if (badgeDot) badgeDot.className = 'dot-idle';
+        if (btnRecord) { btnRecord.disabled = false; btnRecord.textContent = '⏺ Bật Record'; }
+        if (btnStop) { btnStop.disabled = true; btnStop.textContent = '⏹ Dừng & Lưu Video'; }
         return;
       }
 
       if (res.isRecording) {
+        // TRẠNG THÁI: ĐANG THỰC SỰ GHI HÌNH
         let timerStr = '';
         if (typeof res.durationSec === 'number' && res.durationSec > 0) {
           const m = String(Math.floor(res.durationSec / 60)).padStart(2, '0');
@@ -235,21 +300,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         if (badgeLabel) badgeLabel.textContent = `🔴 Đang Record${timerStr}`;
         if (badgeDot) badgeDot.className = 'dot-rec';
-      } else if (res.hasMeetingTab) {
-        if (slotInfo.inSlot && slotInfo.activeSchedule) {
-          if (badgeLabel) badgeLabel.textContent = `🟢 Sẵn sàng (${slotInfo.activeSchedule.name})`;
-          if (badgeDot) badgeDot.className = 'dot-ready';
-        } else {
-          if (badgeLabel) badgeLabel.textContent = 'Đã kết nối phòng (Chờ ca)';
-          if (badgeDot) badgeDot.className = 'dot-idle';
+
+        if (btnRecord) {
+          btnRecord.disabled = true;
+          btnRecord.textContent = '⏺ Đang ghi hình...';
+        }
+        if (btnStop) {
+          btnStop.disabled = false;
+          btnStop.textContent = '⏹ Dừng & Lưu Video';
         }
       } else {
-        if (slotInfo.inSlot && slotInfo.activeSchedule) {
-          if (badgeLabel) badgeLabel.textContent = `Trong ca (${slotInfo.activeSchedule.name})`;
-          if (badgeDot) badgeDot.className = 'dot-idle';
+        // TRẠNG THÁI: CHƯA GHI HÌNH (SẴN SÀNG HOẶC CHỜ CA)
+        if (res.hasMeetingTab) {
+          if (slotInfo.inSlot && slotInfo.activeSchedule) {
+            if (badgeLabel) badgeLabel.textContent = `🟢 Sẵn sàng (${slotInfo.activeSchedule.name})`;
+            if (badgeDot) badgeDot.className = 'dot-ready';
+          } else {
+            if (badgeLabel) badgeLabel.textContent = '⚪ Chưa ghi hình (Chờ ca)';
+            if (badgeDot) badgeDot.className = 'dot-idle';
+          }
         } else {
-          if (badgeLabel) badgeLabel.textContent = 'Chờ ca trực';
-          if (badgeDot) badgeDot.className = 'dot-idle';
+          if (slotInfo.inSlot && slotInfo.activeSchedule) {
+            if (badgeLabel) badgeLabel.textContent = `Trong ca (${slotInfo.activeSchedule.name})`;
+            if (badgeDot) badgeDot.className = 'dot-idle';
+          } else {
+            if (badgeLabel) badgeLabel.textContent = '⚪ Chưa ghi hình';
+            if (badgeDot) badgeDot.className = 'dot-idle';
+          }
+        }
+
+        if (btnRecord) {
+          btnRecord.disabled = false;
+          btnRecord.textContent = '⏺ Bật Record';
+        }
+        if (btnStop) {
+          btnStop.disabled = true;
+          btnStop.textContent = '⏹ Dừng & Lưu (Chưa chạy)';
         }
       }
     });

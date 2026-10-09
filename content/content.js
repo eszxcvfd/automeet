@@ -398,6 +398,10 @@
             <span class="automeet-hud-label">Lịch trình:</span>
             <span class="automeet-hud-val" id="hud-schedule-text">...</span>
           </div>
+          <div class="automeet-hud-row">
+            <span class="automeet-hud-label">Nơi lưu:</span>
+            <span class="automeet-hud-val" id="hud-storage-text" style="color: #38bdf8; font-weight: 600;" title="Thư mục lưu trữ video">...</span>
+          </div>
           <div class="automeet-hud-actions">
             <button class="automeet-btn automeet-btn-record" id="hud-btn-start">⏺ Bật Record</button>
             <button class="automeet-btn automeet-btn-stop" id="hud-btn-stop">⏹ Dừng & Lưu</button>
@@ -456,6 +460,17 @@
     const statusPill = hudElement.querySelector('#hud-status-pill');
     const statusText = hudElement.querySelector('#hud-status-text');
     const schedText = hudElement.querySelector('#hud-schedule-text');
+    const storageText = hudElement.querySelector('#hud-storage-text');
+    const btnStart = hudElement.querySelector('#hud-btn-start');
+    const btnStop = hudElement.querySelector('#hud-btn-stop');
+
+    if (storageText) {
+      const folderName = currentSettings?.saveLocationName || currentSettings?.saveSubfolder || 'Downloads/AutoMeet_Recordings';
+      storageText.textContent = folderName;
+    }
+
+    if (btnStart) btnStart.disabled = isRecordingActive;
+    if (btnStop) btnStop.disabled = !isRecordingActive;
 
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings?.schedules);
 
@@ -479,9 +494,9 @@
     } else {
       if (statusPill) statusPill.className = 'automeet-status-pill waiting';
       if (statusText) {
-        statusText.textContent = currentSettings?.enableAutoRecord
-          ? (inSlot ? `Sẵn sàng (${activeSchedule?.name})` : 'Đang chờ ca')
-          : 'Sẵn sàng (Thủ công)';
+        statusText.textContent = inSlot 
+          ? `🟢 Sẵn sàng (${activeSchedule?.name})` 
+          : '⚪ Chưa ghi hình (Chờ ca)';
       }
     }
 

@@ -83,6 +83,8 @@
     notifyOnRecord: true,
     soundAlert: true,
     showFloatingHud: false, // TẮT BẢNG NỔI TRÊN MÀN HÌNH THEO Ý NGƯỜI DÙNG (Dùng Popup Extension)
+    saveLocationName: 'Thư mục Downloads (Mặc định)',
+    saveSubfolder: 'AutoMeet_Recordings',
     schedules: [
       { id: 'morning', name: 'Ca sáng', start: '07:30', end: '11:30', enabled: true },
       { id: 'afternoon', name: 'Ca chiều', start: '13:00', end: '17:00', enabled: true },
@@ -196,6 +198,55 @@
     });
   }
 
+  /**
+   * IndexedDB lưu trữ FileSystemDirectoryHandle để ghi file tự động không popup
+   */
+  const DB_NAME = 'AutoMeetStorage';
+  const DB_VERSION = 1;
+  const STORE_NAME = 'handles';
+
+  function openAutoMeetDB() {
+    return new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') return resolve(null);
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(STORE_NAME);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async function saveDirectoryHandle(handle) {
+    try {
+      const db = await openAutoMeetDB();
+      if (!db) return false;
+      return new Promise((resolve) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(handle, 'recordingDir');
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      });
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function getSavedDirectoryHandle() {
+    try {
+      const db = await openAutoMeetDB();
+      if (!db) return null;
+      return new Promise((resolve) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get('recordingDir');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Export sang globalThis để dùng được cho cả Content Script, Background và Popup
   const exports = {
     getISOWeekNumber,
@@ -207,6 +258,8 @@
     getNextEvent,
     loadSettings,
     saveSettings,
+    saveDirectoryHandle,
+    getSavedDirectoryHandle,
     DEFAULT_SETTINGS
   };
 
