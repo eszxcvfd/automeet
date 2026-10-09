@@ -1,6 +1,7 @@
 /**
  * AutoMeet - Content Script for meet.jit.si
  * Tự động hóa điều hướng, vượt pre-join, bấm log-in chủ trì, đồng bộ bật/tắt record và hiển thị HUD.
+ * KHÔNG sử dụng inline script để tuân thủ 100% Content Security Policy (CSP) của Jitsi.
  */
 
 (function () {
@@ -24,18 +25,16 @@
   init();
 
   async function init() {
-    injectInpageHooks();
-
     if (utils) {
       currentSettings = await utils.loadSettings();
     }
 
-    // Dọn dẹp HUD cũ trên màn hình (theo yêu cầu người dùng chỉ dùng menu extension)
+    // Dọn dẹp HUD cũ trên màn hình
     const existingHud = document.getElementById('automeet-hud-container');
     if (existingHud) existingHud.remove();
     hudElement = null;
 
-    // Lắng nghe sự kiện đồng bộ từ In-page script (chạy ở MAIN world)
+    // Lắng nghe sự kiện đồng bộ từ In-page script (chạy ở MAIN world qua manifest.json)
     window.addEventListener('message', (event) => {
       if (!event.data) return;
       if (event.data.type === 'AUTOMEET_SYNC_RECORDING_STATE') {
@@ -68,75 +67,6 @@
     setTimeout(() => {
       checkSlotScheduleAutoRecord();
     }, 2000);
-  }
-
-  /**
-   * Đảm bảo inpage script luôn được nhúng vào MAIN world của Jitsi Meet
-   * để đồng bộ Redux store (hiển thị biểu tượng REC đỏ chính thức của Jitsi)
-   */
-  function injectInpageHooks() {
-    if (document.getElementById('automeet-inpage-inline')) return;
-    try {
-      const script = document.createElement('script');
-      script.id = 'automeet-inpage-inline';
-      script.textContent = `(${function() {
-        if (window.__AUTOMEET_INPAGE_INITIALIZED__) return;
-        window.__AUTOMEET_INPAGE_INITIALIZED__ = true;
-        console.log('[AutoMeet Inpage] Script active in MAIN world.');
-
-        let isRecordingActive = false;
-
-        function syncJitsiRecordingUi(running) {
-          const store = window.APP?.store;
-          if (!store) return;
-          try {
-            store.dispatch({
-              type: 'SET_LOCAL_RECORDING_RUNNING',
-              running: running
-            });
-            store.dispatch({
-              type: 'PLAY_SOUND',
-              soundId: running ? 'RECORDING_ON_SOUND' : 'RECORDING_OFF_SOUND'
-            });
-          } catch (e) {}
-        }
-
-        window.addEventListener('message', function(event) {
-          if (!event.data || !event.data.type) return;
-          if (event.data.type === 'AUTOMEET_SET_RECORDING_UI_ACTIVE') {
-            isRecordingActive = true;
-            syncJitsiRecordingUi(true);
-          } else if (event.data.type === 'AUTOMEET_SET_RECORDING_UI_INACTIVE') {
-            isRecordingActive = false;
-            syncJitsiRecordingUi(false);
-          }
-        });
-
-        setInterval(() => {
-          try {
-            const store = window.APP?.store;
-            if (store && isRecordingActive) {
-              const state = store.getState();
-              const confJoined = Boolean(state?.['features/base/conference']?.conference);
-              if (confJoined) {
-                const isRunning = Boolean(state?.['features/recording']?.localRecordingRunning);
-                if (!isRunning) {
-                  store.dispatch({ type: 'SET_LOCAL_RECORDING_RUNNING', running: true });
-                }
-              }
-            }
-            window.postMessage({
-              type: 'AUTOMEET_SYNC_RECORDING_STATE',
-              isRunning: isRecordingActive
-            }, '*');
-          } catch (e) {}
-        }, 1500);
-      }.toString()})();`;
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
-    } catch (e) {
-      console.warn('[AutoMeet Content] Không thể nhúng inpage hooks:', e);
-    }
   }
 
   /**
@@ -403,7 +333,13 @@
     chrome.runtime.sendMessage({
       action: 'START_TAB_CAPTURE',
       schedule: activeSchedule
-    }, () => {});
+    }, (response) => {
+      if (response && response.success) {
+        console.log('[AutoMeet] Background xác nhận TabCapture đã bắt đầu.');
+      } else {
+        console.warn('[AutoMeet] Background báo lỗi TabCapture:', response?.error);
+      }
+    });
   }
 
   /**

@@ -51,38 +51,53 @@ async function handleStartRecording(streamId, filename) {
   recordedChunks = [];
 
   try {
-    // Thu thập audio + video từ tab mà không mở bất kỳ hộp thoại nào
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        mandatory: {
-          chromeMediaSource: 'tab',
-          chromeMediaSourceId: streamId
-        }
-      },
-      video: {
-        mandatory: {
-          chromeMediaSource: 'tab',
-          chromeMediaSourceId: streamId
-        }
-      }
-    });
-
-    // Phát song song âm thanh ra loa để người dùng vẫn nghe thấy tiếng cuộc họp
+    // 1. Thử thu thập cả Audio và Video từ Tab
     try {
-      audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(mediaStream);
-      source.connect(audioCtx.destination);
-    } catch (e) {
-      console.warn('[AutoMeet Offscreen] Không thể phát âm thanh ra loa:', e);
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId
+          }
+        },
+        video: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId
+          }
+        }
+      });
+    } catch (audioErr) {
+      console.warn('[AutoMeet Offscreen] Lỗi thu audio tab, thử fallback video:', audioErr);
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId
+          }
+        }
+      });
     }
 
-    // Chọn định dạng MIME tối ưu (hỗ trợ cả video VP9/VP8 và audio Opus)
+    // 2. Phát song song âm thanh ra loa để người dùng vẫn nghe thấy tiếng cuộc họp
+    try {
+      const audioTracks = mediaStream.getAudioTracks();
+      if (audioTracks && audioTracks.length > 0) {
+        audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(mediaStream);
+        source.connect(audioCtx.destination);
+      }
+    } catch (e) {
+      console.warn('[AutoMeet Offscreen] Không thể định tuyến âm thanh ra loa:', e);
+    }
+
+    // 3. Chọn định dạng MIME tối ưu
     const mimeType = getOptimalMimeType();
     console.log(`[AutoMeet Offscreen] Sử dụng MIME Type: ${mimeType}`);
 
     mediaRecorder = new MediaRecorder(mediaStream, {
       mimeType,
-      videoBitsPerSecond: 2500000 // 2.5 Mbps cho video sắc nét
+      videoBitsPerSecond: 2500000
     });
 
     mediaRecorder.ondataavailable = (event) => {
