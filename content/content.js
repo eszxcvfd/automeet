@@ -148,6 +148,70 @@
   }
 
   /**
+   * Kiểm tra xem có đang ở màn hình sảnh chờ (Lobby / Knocking - chưa có host mở phòng)
+   */
+  function isWaitingInLobby() {
+    // 1. Kiểm tra selector đặc thù của Jitsi Lobby
+    if (document.querySelector('.lobby-screen, [data-testid="lobby.section"], [data-testid="lobby.loginButton"], .knocking-lobby, .knocking-participant-list')) {
+      return true;
+    }
+
+    // 2. Kiểm tra văn bản thông báo phòng chờ chưa bắt đầu
+    const bodyText = document.body ? document.body.innerText : '';
+    if (bodyText.includes('The conference has not yet started') ||
+        bodyText.includes('Asking to join meeting') ||
+        bodyText.includes('Chờ người chủ trì') ||
+        bodyText.includes('Cuộc họp chưa bắt đầu') ||
+        bodyText.includes('waiting for moderator') ||
+        bodyText.includes('knocking')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Kiểm tra xem có đang ở màn hình Pre-join (Nhập tên & bấm Tham gia)
+   */
+  function isPrejoinScreen() {
+    return !!document.querySelector(
+      'input[data-testid="prejoin.nameInput"], [data-testid="prejoin.joinMeeting"], button.prejoin-btn, .prejoin-input-area'
+    );
+  }
+
+  /**
+   * Kiểm tra xem người dùng đã thực sự ở bên trong cuộc họp hay chưa
+   */
+  function isInMeetingRoom() {
+    // Nếu đang ở màn hình chờ Pre-join hoặc Lobby thì chưa tính là đã vào phòng
+    if (isPrejoinScreen() || isWaitingInLobby()) {
+      return false;
+    }
+
+    // 1. Kiểm tra các nút điều khiển chỉ xuất hiện khi đã vào phòng
+    const inMeetingControls = document.querySelector(
+      '[data-testid="chat.open"], [aria-label*="chat" i], [aria-label*="trò chuyện" i], ' +
+      '[data-testid="participants.toggle"], [aria-label*="participant" i], [aria-label*="người tham gia" i], ' +
+      '[data-testid="tileview.toggle"], [aria-label*="tile view" i], [aria-label*="dạng lưới" i], ' +
+      '[data-testid="raisehand.toggle"], [aria-label*="raise hand" i], [aria-label*="giơ tay" i], ' +
+      '[aria-label*="Share your screen" i], [aria-label*="Chia sẻ màn hình" i], ' +
+      '#filmstripRemoteVideosContainer, .filmstrip-videos'
+    );
+    if (inMeetingControls) return true;
+
+    // 2. Nút 3 chấm More actions (chỉ có khi đã vào phòng, không có ở Lobby)
+    if (findMoreActionsButton()) return true;
+
+    // 3. Có container phòng họp và không có bất kỳ dấu hiệu lobby nào
+    const conferencePage = document.querySelector('#videoconference_page');
+    if (conferencePage && !document.querySelector('.lobby-screen, [data-testid="lobby.loginButton"]')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * Tự động kiểm tra và kích hoạt hoặc dừng record theo khung giờ lịch trình
    */
   async function checkSlotScheduleAutoRecord() {
@@ -155,13 +219,16 @@
     if (isStartingRecording || isStoppingRecording) return;
 
     // Không thao tác nếu đang ở màn hình chờ Pre-join
-    const prejoinInput = document.querySelector('input[data-testid="prejoin.nameInput"], input[placeholder*="name" i]');
-    const prejoinBtn = document.querySelector('[data-testid="prejoin.joinMeeting"], button.prejoin-btn');
-    if (prejoinInput || prejoinBtn) return;
+    if (isPrejoinScreen()) return;
 
-    // Đảm bảo đã vào trong cuộc họp (có giao diện họp)
-    const inMeeting = document.querySelector('#videoconference_page, #new-toolbox, .toolbox-button, #largeVideoContainer');
-    if (!inMeeting) return;
+    // Nếu đang ở sảnh chờ (Lobby - chưa có host mở phòng)
+    if (isWaitingInLobby()) {
+      updateHUD();
+      return;
+    }
+
+    // Đảm bảo đã thực sự vào trong cuộc họp
+    if (!isInMeetingRoom()) return;
 
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings.schedules);
 
@@ -261,33 +328,68 @@
   }
 
   /**
+   * Xác thực xem một phần tử có thực sự là nút "More actions" (3 chấm) hay không
+   * Tuyệt đối loại bỏ các nút Cài đặt (Settings), Gác máy (Leave), Mic, Camera...
+   */
+  function isValidMoreActionsButton(el) {
+    if (!el || el.offsetParent === null) return false;
+    if (el.closest('#automeet-hud-container, .automeet-toast')) return false;
+
+    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    const testid = (el.getAttribute('data-testid') || '').toLowerCase();
+    const title = (el.getAttribute('title') || '').toLowerCase();
+
+    // 1. Danh sách loại trừ tuyệt đối: các nút không bao giờ là More actions
+    const excludePatterns = [
+      'setting', 'cài đặt', 'thiết lập',
+      'leave', 'rời', 'hangup',
+      'camera', 'micro', 'audio', 'video',
+      'background', 'invite', 'mời', 'login'
+    ];
+    for (const p of excludePatterns) {
+      if (aria.includes(p) || testid.includes(p) || title.includes(p)) {
+        return false;
+      }
+    }
+
+    // 2. Dấu hiệu khẳng định là nút More actions
+    // - Có vector SVG 3 chấm ngang (M16.5 12)
+    const hasMoreSvg = !!el.querySelector('svg path[d*="16.5 12"], svg path[d*="M16.5 12"]');
+    if (hasMoreSvg) return true;
+
+    // - Có aria-label hoặc testid đặc trưng của menu 3 chấm
+    const hasMoreAria = aria.includes('more actions') ||
+                        aria.includes('close more actions') ||
+                        aria.includes('thao tác khác') ||
+                        aria.includes('thêm hành động') ||
+                        aria.includes('tùy chọn khác') ||
+                        aria.includes('hành động khác');
+    if (hasMoreAria) return true;
+
+    if (testid === 'overflow-menu-button' || testid.includes('overflow')) return true;
+
+    return false;
+  }
+
+  /**
    * Tìm nút "..." (More actions / Thao tác khác) trên thanh toolbar Jitsi
-   * Sử dụng kết hợp CSS class đặc trưng, vector SVG 3 chấm, vị trí cạnh nút Rời phòng (Hangup), và aria-label đa ngôn ngữ
+   * Được bảo vệ bởi isValidMoreActionsButton để không bao giờ bấm nhầm
    */
   function findMoreActionsButton() {
     wakeUpToolbar();
 
-    // 1. Tìm theo class container đặc trưng của nút 3 chấm trong Jitsi Meet
-    let btn = document.querySelector('.toolbox-button-wth-dialog .toolbox-button, .context-menu .toolbox-button');
-    if (btn && !btn.closest('#automeet-hud-container, .automeet-toast')) return btn;
+    // 1. Tìm theo data-testid chính xác hoặc id của Jitsi
+    let btn = document.querySelector('[data-testid="overflow-menu-button"], #more-actions-menu-button');
+    if (isValidMoreActionsButton(btn)) return btn;
 
     // 2. Tìm theo vector path SVG của 3 dấu chấm tròn ngang (M16.5 12)
-    const svgPath = document.querySelector('svg path[d*="M16.5 12"], svg path[d*="16.5 12"]');
-    btn = svgPath?.closest('[role="button"], .toolbox-button, button');
-    if (btn && !btn.closest('#automeet-hud-container, .automeet-toast')) return btn;
-
-    // 3. Tìm theo vị trí: Nút 3 chấm luôn nằm ngay liền kề trước nút gác máy màu đỏ (Leave/Hangup)
-    const leaveBtn = document.querySelector(
-      '[aria-label*="Leave" i], [aria-label*="Rời" i], .hangup-button, [data-testid="hangup-button"]'
-    );
-    if (leaveBtn) {
-      const candidate = leaveBtn.closest('.toolbox-content-items, .new-toolbox, div')?.querySelector('.toolbox-button-wth-dialog .toolbox-button') ||
-        leaveBtn.parentElement?.previousElementSibling?.querySelector('[role="button"]') ||
-        leaveBtn.previousElementSibling?.querySelector('[role="button"]');
-      if (candidate && !candidate.closest('#automeet-hud-container, .automeet-toast')) return candidate;
+    const svgPaths = document.querySelectorAll('svg path[d*="16.5 12"], svg path[d*="M16.5 12"]');
+    for (const p of svgPaths) {
+      const parentBtn = p.closest('[role="button"], .toolbox-button, button');
+      if (isValidMoreActionsButton(parentBtn)) return parentBtn;
     }
 
-    // 4. Tìm theo các nhãn aria-label hỗ trợ cả tiếng Anh và tiếng Việt
+    // 3. Tìm theo các nhãn aria-label hỗ trợ cả tiếng Anh và tiếng Việt
     const selectors = [
       '[aria-label="More actions"]',
       '[aria-label*="More actions" i]',
@@ -296,14 +398,24 @@
       '[aria-label*="Thao tác khác" i]',
       '[aria-label*="Tùy chọn khác" i]',
       '[aria-label*="Hành động khác" i]',
-      '[data-testid="overflow-menu-button"]',
-      '#more-actions-menu-button',
-      '.toolbox-button[aria-label*="More" i]'
+      '.toolbox-button-wth-dialog .toolbox-button',
+      '.context-menu .toolbox-button'
     ];
 
     for (const sel of selectors) {
       const el = document.querySelector(sel);
-      if (el && !el.closest('#automeet-hud-container, .automeet-toast')) return el;
+      if (isValidMoreActionsButton(el)) return el;
+    }
+
+    // 4. Tìm kiếm dự phòng theo vị trí liền kề nút Leave nhưng BẮT BUỘC phải thỏa mãn isValidMoreActionsButton
+    const leaveBtn = document.querySelector(
+      '[aria-label*="Leave" i], [aria-label*="Rời" i], .hangup-button, [data-testid="hangup-button"]'
+    );
+    if (leaveBtn) {
+      const candidate = leaveBtn.closest('.toolbox-content-items, .new-toolbox, div')?.querySelector('.toolbox-button-wth-dialog .toolbox-button') ||
+        leaveBtn.parentElement?.previousElementSibling?.querySelector('[role="button"]') ||
+        leaveBtn.previousElementSibling?.querySelector('[role="button"]');
+      if (isValidMoreActionsButton(candidate)) return candidate;
     }
 
     return null;
@@ -363,21 +475,41 @@
       return;
     }
 
-    // Kiểm tra nếu đang ở màn hình chờ Pre-join
-    const isPrejoin = document.querySelector('[data-testid="prejoin.joinMeeting"], .prejoin-input-area, input[placeholder*="name" i]');
-    if (isPrejoin) {
-      showToast('⚠ Bạn đang ở màn hình chờ. Vui lòng bấm Tham gia cuộc họp trước.');
+    // 1. Kiểm tra nếu đang ở màn hình chờ Pre-join
+    if (isPrejoinScreen()) {
+      showToast('⏳ Đang ở màn hình chờ (Pre-join). Tự động điền tên và tham gia...');
+      handlePrejoinScreen();
       return;
     }
 
-    // Kiểm tra nếu modal Record đã mở sẵn trên màn hình
+    // 2. Kiểm tra nếu đang ở màn hình phòng chờ (Lobby - chờ host mở phòng)
+    if (isWaitingInLobby()) {
+      console.log('[AutoMeet] Đang ở sảnh chờ cuộc họp (Chờ Host mở phòng). Sẽ tự động Record ngay khi vào phòng.');
+      showToast('⏳ Đang ở sảnh chờ cuộc họp (Chờ Host mở phòng)... Sẽ tự động Record ngay khi vào phòng!');
+      return;
+    }
+
+    // 3. Đảm bảo đã thực sự vào trong cuộc họp
+    if (!isInMeetingRoom()) {
+      console.log('[AutoMeet] Chưa vào phòng họp, đang chờ giao diện sẵn sàng...');
+      return;
+    }
+
+    // 4. Luôn đảm bảo TabCapture nền được kích hoạt song song (Dual Engine)
+    try {
+      if (chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ action: 'START_TAB_CAPTURE' }).catch(() => {});
+      }
+    } catch (e) {}
+
+    // 5. Kiểm tra nếu modal Record đã mở sẵn trên màn hình
     let startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]');
     if (startBtn && startBtn.offsetParent !== null) {
-      highlightStartButton(startBtn);
+      await autoConfirmStartRecording(startBtn);
       return;
     }
 
-    showToast('⏳ Đang mở menu và chọn Record...');
+    showToast('⏳ Đang kích hoạt Record tự động...');
 
     // Bước 1: Mở menu 3 chấm More actions (nếu chưa mở)
     let recordItem = findRecordMenuItem();
@@ -390,50 +522,47 @@
         await sleep(300);
       }
 
-      if (!moreBtn) {
-        console.warn('[AutoMeet] Chưa tìm thấy nút 3 chấm More actions!');
-        showToast('⚠ Chưa tìm thấy thanh công cụ Jitsi. Vui lòng di chuột vào giữa màn hình cuộc họp.');
+      if (moreBtn) {
+        console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
+        simulateUserClick(moreBtn);
+
+        // Chờ menu xuất hiện (tối đa 2.5s)
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await sleep(250);
+          recordItem = findRecordMenuItem();
+          if (recordItem) break;
+        }
+      }
+    }
+
+    if (recordItem) {
+      console.log('[AutoMeet] Đang click mục Record trong menu...');
+      simulateUserClick(recordItem);
+
+      // Bước 2: Chờ modal Record xuất hiện và tự động bấm nút Start (tối đa 4s)
+      for (let attempt = 0; attempt < 16; attempt++) {
+        await sleep(250);
+        startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]') ||
+          Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
+            const text = (b.textContent || '').trim().toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return text === 'start' || text.includes('start recording') || aria.includes('start recording') || text === 'bắt đầu';
+          });
+        if (startBtn && !startBtn.closest('#automeet-hud-container, .automeet-toast')) break;
+      }
+
+      if (startBtn) {
+        await autoConfirmStartRecording(startBtn);
         return;
       }
-
-      console.log('[AutoMeet] Đang click nút 3 chấm More actions...');
-      simulateUserClick(moreBtn);
-
-      // Chờ menu xuất hiện (tối đa 2.5s)
-      for (let attempt = 0; attempt < 10; attempt++) {
-        await sleep(250);
-        recordItem = findRecordMenuItem();
-        if (recordItem) break;
-      }
     }
 
-    if (!recordItem) {
-      console.warn('[AutoMeet] Không tìm thấy mục Record trong menu Jitsi!');
-      showToast('⚠ Không tìm thấy mục "Record" trong danh sách menu!');
-      return;
-    }
-
-    console.log('[AutoMeet] Đang click mục Record trong menu...');
-    simulateUserClick(recordItem);
-
-    // Bước 2: Chờ modal Record xuất hiện và highlight nút Start (tối đa 4s)
-    for (let attempt = 0; attempt < 16; attempt++) {
-      await sleep(250);
-      startBtn = document.querySelector('[data-testid="recordingDialog.startRecording"], button[aria-label*="Start recording" i]') ||
-        Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
-          const text = (b.textContent || '').trim().toLowerCase();
-          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-          return text === 'start' || text.includes('start recording') || aria.includes('start recording') || text === 'bắt đầu';
-        });
-      if (startBtn && !startBtn.closest('#automeet-hud-container, .automeet-toast')) break;
-    }
-
-    if (startBtn) {
-      await autoConfirmStartRecording(startBtn);
-    } else {
-      playNotificationSound();
-      showToast('👉 Đang kiểm tra luồng ghi âm...');
-    }
+    // Nếu Jitsi không có nút 3 chấm hoặc server không hỗ trợ Cloud Record:
+    // TabCapture nền (Engine 2) của AutoMeet đã được kích hoạt và đang ghi âm/hình!
+    isRecordingActive = true;
+    updateHUD();
+    playNotificationSound();
+    showToast('🎥 TỰ ĐỘNG GHI HÌNH ĐÃ KÍCH HOẠT (TabCapture Engine)! Video sẽ tự động lưu khi hết ca.');
   }
 
   /**
@@ -487,6 +616,13 @@
    */
   async function triggerStopRecording() {
     showToast('⏳ Đang xử lý dừng Record...');
+
+    // 1. Luôn gửi tín hiệu dừng TabCapture ngầm đến Background để lưu file WebM về máy
+    try {
+      if (chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ action: 'STOP_TAB_CAPTURE' }).catch(() => {});
+      }
+    } catch (e) {}
 
     // Lớp 1: Kiểm tra xem hộp thoại xác nhận Dừng đã mở sẵn trên màn hình chưa
     let confirmBtn = findStopConfirmationButton();
@@ -736,6 +872,20 @@
       if (statusText) {
         statusText.textContent = inSlot ? `Đang Record (${activeSchedule?.name})` : 'Đang Record';
       }
+    } else if (isWaitingInLobby()) {
+      if (statusPill) {
+        statusPill.className = 'automeet-status-pill waiting';
+      }
+      if (statusText) {
+        statusText.textContent = 'Phòng chờ (Chờ Host mở)';
+      }
+    } else if (isPrejoinScreen()) {
+      if (statusPill) {
+        statusPill.className = 'automeet-status-pill waiting';
+      }
+      if (statusText) {
+        statusText.textContent = 'Đang vào phòng...';
+      }
     } else {
       if (statusPill) {
         statusPill.className = 'automeet-status-pill waiting';
@@ -793,7 +943,13 @@
   function playNotificationSound() {
     if (!currentSettings?.soundAlert) return;
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.close().catch(() => {});
+        return;
+      }
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -801,10 +957,11 @@
       osc.type = 'sine';
       osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
       osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
       osc.start();
-      osc.stop(ctx.currentTime + 0.4);
+      osc.stop(ctx.currentTime + 0.35);
+      setTimeout(() => { ctx.close().catch(() => {}); }, 450);
     } catch (e) {
       // AudioContext có thể bị block nếu chưa có tương tác
     }

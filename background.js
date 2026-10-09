@@ -187,6 +187,20 @@ async function ensureOffscreenDocument() {
 }
 
 /**
+/**
+ * Loại bỏ dấu tiếng Việt để tạo tên file an toàn cho mọi hệ điều hành
+ */
+function removeVietnameseTones(str) {
+  if (!str) return 'Ca';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+/**
  * Bắt đầu ghi hình ngầm bằng TabCapture (Hoàn toàn tự động không cần người dùng xác nhận)
  */
 async function startTabCaptureRecording(tab, scheduleItem, roomName) {
@@ -200,7 +214,7 @@ async function startTabCaptureRecording(tab, scheduleItem, roomName) {
       if (streamId) {
         const now = new Date();
         const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-        const safeSched = (scheduleItem?.name || 'Ca').replace(/\s+/g, '');
+        const safeSched = removeVietnameseTones(scheduleItem?.name || 'Ca');
         const filename = `${roomName}_${safeSched}_${dateStr}.webm`;
 
         chrome.runtime.sendMessage({
@@ -238,12 +252,13 @@ async function stopTabCaptureRecording() {
  */
 async function findExistingMeetingTab(roomName) {
   const tabs = await chrome.tabs.query({ url: '*://meet.jit.si/*' });
+  const lowerRoom = (roomName || '').toLowerCase();
   for (const t of tabs) {
-    if (t.url && t.url.includes(roomName)) {
+    if (t.url && t.url.toLowerCase().includes(lowerRoom)) {
       return t;
     }
   }
-  return tabs.length > 0 ? tabs[0] : null;
+  return null;
 }
 
 /**
@@ -255,6 +270,19 @@ async function findOrCreateMeetingTab(roomName, fullUrl) {
   if (existingTab) {
     await chrome.tabs.update(existingTab.id, { active: true });
     return existingTab;
+  }
+
+  // Nếu có tab meet.jit.si đang ở trang chủ, chuyển hướng tab đó đến phòng hôm nay
+  const allJitsiTabs = await chrome.tabs.query({ url: '*://meet.jit.si/*' });
+  for (const t of allJitsiTabs) {
+    try {
+      const u = new URL(t.url);
+      const path = u.pathname.replace(/^\/+|\/+$/g, '');
+      if (!path) {
+        const updated = await chrome.tabs.update(t.id, { url: fullUrl, active: true });
+        return updated;
+      }
+    } catch (e) {}
   }
 
   // Nếu chưa có, mở tab mới
@@ -308,6 +336,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === 'OPEN_TODAY_ROOM') {
       const tab = await findOrCreateMeetingTab(todayRoom, todayUrl);
       sendResponse({ success: true, tabId: tab.id });
+    } else if (request.action === 'START_TAB_CAPTURE') {
+      const tab = sender.tab || await findExistingMeetingTab(todayRoom);
+      const settings = utils ? await utils.loadSettings() : null;
+      const slot = utils ? utils.checkCurrentSlot(settings?.schedules, now) : null;
+      if (tab) {
+        await startTabCaptureRecording(tab, slot?.activeSchedule, todayRoom);
+      }
+      sendResponse({ success: true });
+    } else if (request.action === 'STOP_TAB_CAPTURE') {
+      await stopTabCaptureRecording();
+      sendResponse({ success: true });
     } else if (request.action === 'TRIGGER_RECORD_NOW') {
       const tab = await findOrCreateMeetingTab(todayRoom, todayUrl);
       const settings = utils ? await utils.loadSettings() : null;
