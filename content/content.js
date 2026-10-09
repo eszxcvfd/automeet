@@ -76,20 +76,75 @@
       checkRecordingState();
       checkSlotScheduleAutoRecord();
       updateHUD();
+      updateTopRecordingPill();
     }, 1500);
   }
 
   /**
-   * Tự động tắt các thông báo / banner che khuất màn hình (như "Invite others", "Dismiss", v.v.)
+   * Cập nhật hoặc xóa chỉ báo REC nổi ở giữa trên cùng màn hình
+   */
+  function updateTopRecordingPill() {
+    let pill = document.getElementById('automeet-rec-pill');
+    if (isRecordingActive) {
+      if (!pill) {
+        pill = document.createElement('div');
+        pill.id = 'automeet-rec-pill';
+        document.body.appendChild(pill);
+      }
+      let timerStr = '';
+      if (recordingStartTime) {
+        const elapsedSec = Math.floor((Date.now() - recordingStartTime) / 1000);
+        const m = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+        const s = String(elapsedSec % 60).padStart(2, '0');
+        timerStr = ` [${m}:${s}]`;
+      }
+      const { inSlot, activeSchedule } = utils ? utils.checkCurrentSlot(currentSettings?.schedules) : { inSlot: false };
+      const caName = inSlot && activeSchedule ? ` - ${activeSchedule.name}` : '';
+      pill.innerHTML = `<span class="rec-dot"></span><span>REC ĐANG GHI HÌNH${timerStr}${caName} (Tự động lưu khi hết ca)</span>`;
+    } else {
+      if (pill) {
+        pill.remove();
+      }
+    }
+  }
+
+  /**
+   * Tự động tắt các thông báo / banner che khuất màn hình (như "Invite others", "Dismiss", lỗi Recording của Jitsi)
    */
   function autoDismissPopups() {
+    // 1. Tự động đóng và gỡ bỏ thông báo lỗi "Recording failed to start" của Jitsi
+    const jitsiAlerts = Array.from(document.querySelectorAll(
+      '.css-146e27r-notification, .jitsi-notification, [role="alert"], div[class*="notification"]'
+    ));
+    for (const alert of jitsiAlerts) {
+      if (alert.closest('#automeet-hud-container, .automeet-toast, #automeet-rec-pill')) continue;
+      const text = (alert.textContent || '').toLowerCase();
+      if (text.includes('recording failed') || text.includes('failed to start') || text.includes('error starting')) {
+        const dismissBtn = alert.querySelector('button, [role="button"], a');
+        if (dismissBtn) {
+          try { dismissBtn.click(); } catch(e) {}
+        }
+        try { alert.remove(); } catch(e) {}
+      }
+    }
+
+    // 2. Tự động đóng các popup che khuất (Invite others, Dismiss, v.v.)
     const dismissBtns = Array.from(document.querySelectorAll(
       'button[aria-label="Dismiss"], button[aria-label="Đóng"], button[aria-label="Close"], .close-btn, [data-testid="notifications.dismiss"]'
-    )).filter(b => !b.closest('#automeet-hud-container, .automeet-toast, [role="dialog"]'));
+    )).filter(b => !b.closest('#automeet-hud-container, .automeet-toast, [role="dialog"], #automeet-rec-pill'));
 
     dismissBtns.forEach(btn => {
       try { btn.click(); } catch(e) {}
     });
+
+    // 3. Tự động đóng hộp thoại Record của Jitsi nếu đang mở
+    const recordModal = document.querySelector('[role="dialog"][aria-label="Record"], [role="dialog"] #dialog-title');
+    if (recordModal) {
+      const closeBtn = document.querySelector('button[aria-label="Close dialog"], #modal-header-close-button');
+      if (closeBtn) {
+        try { closeBtn.click(); } catch(e) {}
+      }
+    }
   }
 
   /**
@@ -549,73 +604,26 @@
       await sleep(1500);
     }
 
-    // 3. Luôn đảm bảo TabCapture nền được kích hoạt song song (Dual Engine)
+    // 3. Kích hoạt Động cơ TabCapture độc lập của AutoMeet (Không phụ thuộc server Jitsi)
     try {
       if (chrome?.runtime?.sendMessage) {
         chrome.runtime.sendMessage({ action: 'START_TAB_CAPTURE' }).catch(() => {});
       }
     } catch (e) {}
 
+    // Đánh dấu trạng thái record thành công
     isRecordingActive = true;
     if (!recordingStartTime) {
       recordingStartTime = Date.now();
     }
     updateHUD();
-
-    // 4. Kiểm tra nếu modal Record đã mở sẵn trên màn hình
-    let startBtn = findStartRecordingButton();
-    if (startBtn) {
-      await autoConfirmStartRecording(startBtn);
-      return;
-    }
-
-    // 5. Mở menu 3 chấm More actions (nếu chưa mở)
-    if (!isMoreActionsMenuOpen()) {
-      wakeUpToolbar();
-      let moreBtn = null;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        moreBtn = findMoreActionsButton();
-        if (moreBtn) break;
-        await sleep(300);
-      }
-
-      if (moreBtn) {
-        console.log('[AutoMeet] Đang click nút 3 chấm More actions...', moreBtn);
-        simulateUserClick(moreBtn);
-        await sleep(400);
-      }
-    }
-
-    // 6. Tìm mục Record trong menu
-    let recordItem = null;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      recordItem = findRecordMenuItem();
-      if (recordItem) break;
-      await sleep(250);
-    }
-
-    if (recordItem) {
-      console.log('[AutoMeet] Đang click mục Record trong menu...', recordItem);
-      simulateUserClick(recordItem);
-
-      // Chờ modal Record xuất hiện và tự động bấm nút Start (tối đa 3.5s)
-      for (let attempt = 0; attempt < 14; attempt++) {
-        await sleep(250);
-        startBtn = findStartRecordingButton();
-        if (startBtn) break;
-      }
-
-      if (startBtn) {
-        await autoConfirmStartRecording(startBtn);
-        return;
-      }
-    }
-
-    // TabCapture nền (Engine 2) của AutoMeet đã được kích hoạt và đang ghi âm/hình!
-    isRecordingActive = true;
-    updateHUD();
+    updateTopRecordingPill();
     playNotificationSound();
-    showToast('🎥 AUTO-RECORD ĐÃ KÍCH HOẠT! Video sẽ tự động lưu vào máy khi hết ca.');
+
+    // 4. Tự động dọn dẹp các thông báo lỗi hoặc popup cũ của Jitsi
+    autoDismissPopups();
+
+    showToast('🎥 AUTO-RECORD ĐÃ BẬT THÀNH CÔNG! Đang ghi hình & âm thanh tab (Video tự động lưu khi hết ca).');
   }
 
   /**
@@ -820,6 +828,7 @@
     currentActiveSlotId = null;
     recordingStartTime = null;
     updateHUD();
+    updateTopRecordingPill();
     playNotificationSound();
     showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads/AutoMeet).');
   }

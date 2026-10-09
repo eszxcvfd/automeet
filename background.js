@@ -182,11 +182,11 @@ async function ensureOffscreenDocument() {
         justification: 'Automated background tab audio and video recording for scheduled meeting'
       });
       console.log('[AutoMeet Background] Đã tạo Offscreen Document thành công');
+      await new Promise(r => setTimeout(r, 600));
     }
   }
 }
 
-/**
 /**
  * Loại bỏ dấu tiếng Việt để tạo tên file an toàn cho mọi hệ điều hành
  */

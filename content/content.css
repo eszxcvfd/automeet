@@ -229,3 +229,42 @@
   min-width: auto;
   padding: 8px 12px;
 }
+
+/* On-screen prominent recording banner */
+#automeet-rec-pill {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999999;
+  background: rgba(220, 38, 38, 0.94);
+  color: #ffffff;
+  padding: 7px 20px;
+  border-radius: 30px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 24px rgba(220, 38, 38, 0.6);
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  animation: automeet-glow 2s infinite ease-in-out;
+}
+
+#automeet-rec-pill .rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffffff;
+  animation: automeet-pulse 1.2s infinite;
+}
+
+@keyframes automeet-glow {
+  0%, 100% { box-shadow: 0 4px 16px rgba(220, 38, 38, 0.4); }
+  50% { box-shadow: 0 4px 28px rgba(220, 38, 38, 0.85); }
+}

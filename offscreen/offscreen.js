@@ -90,22 +90,44 @@ async function handleStartRecording(streamId, filename) {
       const blob = new Blob(recordedChunks, { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
 
-      // Gửi blob URL về background để tải xuống tự động
-      chrome.runtime.sendMessage({
-        action: 'SAVE_RECORDING_BLOB',
-        blobUrl: blobUrl,
-        filename: currentFilename
-      });
+      // Thử tải qua chrome.downloads trực tiếp nếu có
+      if (chrome?.downloads?.download) {
+        chrome.downloads.download({
+          url: blobUrl,
+          filename: `AutoMeet/${currentFilename}`,
+          saveAs: false
+        }, (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.warn('[AutoMeet Offscreen] chrome.downloads gặp lỗi, fallback gửi về background:', chrome.runtime.lastError);
+            chrome.runtime.sendMessage({
+              action: 'SAVE_RECORDING_BLOB',
+              blobUrl: blobUrl,
+              filename: currentFilename
+            });
+          } else {
+            console.log('[AutoMeet Offscreen] File đã được tải xuống trực tiếp, id:', downloadId);
+          }
+        });
+      } else {
+        // Gửi blob URL về background để tải xuống
+        chrome.runtime.sendMessage({
+          action: 'SAVE_RECORDING_BLOB',
+          blobUrl: blobUrl,
+          filename: currentFilename
+        });
+      }
 
-      // Giải phóng tracks
-      if (mediaStream) {
-        mediaStream.getTracks().forEach((track) => track.stop());
-        mediaStream = null;
-      }
-      if (audioCtx) {
-        audioCtx.close().catch(() => {});
-        audioCtx = null;
-      }
+      // Giữ stream và blob trong 20s trước khi giải phóng
+      setTimeout(() => {
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((track) => track.stop());
+          mediaStream = null;
+        }
+        if (audioCtx) {
+          audioCtx.close().catch(() => {});
+          audioCtx = null;
+        }
+      }, 20000);
     };
 
     // Bắt đầu ghi hình (lấy chunk mỗi 1000ms)
