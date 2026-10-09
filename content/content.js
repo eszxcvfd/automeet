@@ -19,11 +19,14 @@
   let currentActiveSlotId = null;
   let isStartingRecording = false;
   let isStoppingRecording = false;
+  let lastRecordAttemptTime = 0;
 
   // Khởi tạo
   init();
 
   async function init() {
+    injectInpageHooks();
+
     if (utils) {
       currentSettings = await utils.loadSettings();
     }
@@ -60,21 +63,212 @@
       }
     });
 
-    // 1. Kiểm tra nếu đang ở trang chủ (chưa vào phòng)
+    // 1. Đảm bảo script inpage luôn được nhúng vào trang web
+    injectInpageHooks();
+
+    // 2. Kiểm tra nếu đang ở trang chủ (chưa vào phòng)
     const pathname = window.location.pathname.replace(/^\/+|\/+$/g, '');
     if (!pathname) {
       handleHomePage();
       return;
     }
 
-    // 2. Nếu đang ở trang phòng họp
+    // 3. Nếu đang ở trang phòng họp
     startMeetingWatcher();
     listenForMessages();
 
-    // 3. Khởi động kiểm tra lịch sau 3.5 giây khi vào phòng
+    // 4. Khởi động kiểm tra lịch sau 3 giây khi vào phòng
     setTimeout(() => {
       checkSlotScheduleAutoRecord();
-    }, 3500);
+    }, 3000);
+  }
+
+  /**
+   * Đảm bảo inpage hooks luôn được nhúng vào MAIN world của Jitsi Meet
+   * Sử dụng kỹ thuật inline injection để chạy tức thì và chắc chắn 100% không phụ thuộc network/CSP.
+   */
+  function injectInpageHooks() {
+    if (document.getElementById('automeet-inpage-inline')) return;
+    try {
+      const script = document.createElement('script');
+      script.id = 'automeet-inpage-inline';
+      script.textContent = `(${function() {
+        if (window.__AUTOMEET_INPAGE_INITIALIZED__) return;
+        window.__AUTOMEET_INPAGE_INITIALIZED__ = true;
+        console.log('[AutoMeet Inpage] Hooks activated in MAIN world.');
+
+        let currentCaptureHandle = 'JitsiMeet-automeet';
+
+        function hookSetCaptureHandleConfig(obj) {
+          if (!obj || typeof obj.setCaptureHandleConfig !== 'function') return;
+          const orig = obj.setCaptureHandleConfig.bind(obj);
+          obj.setCaptureHandleConfig = function(config) {
+            if (config && config.handle) currentCaptureHandle = config.handle;
+            try { return orig(config); } catch (e) {}
+          };
+        }
+        if (typeof MediaDevices !== 'undefined' && MediaDevices.prototype) {
+          hookSetCaptureHandleConfig(MediaDevices.prototype);
+        }
+        if (navigator.mediaDevices) {
+          hookSetCaptureHandleConfig(navigator.mediaDevices);
+        }
+
+        async function automatedGetDisplayMedia(constraints) {
+          console.log('[AutoMeet Inpage] getDisplayMedia intercepted. Providing automated MediaStream...');
+          const canvas = document.createElement('canvas');
+          canvas.width = 1280;
+          canvas.height = 720;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#1e1e1e';
+          ctx.fillRect(0, 0, 1280, 720);
+
+          let animRunning = true;
+          function drawFrame() {
+            if (!animRunning) return;
+            const vid = document.querySelector('#largeVideo, video');
+            if (vid && vid.videoWidth > 0 && !vid.paused && !vid.ended) {
+              try { ctx.drawImage(vid, 0, 0, 1280, 720); } catch (e) {}
+            }
+            requestAnimationFrame(drawFrame);
+          }
+          drawFrame();
+
+          const canvasStream = canvas.captureStream(30);
+          const vTrack = canvasStream.getVideoTracks()[0];
+
+          const origGetSettings = vTrack.getSettings.bind(vTrack);
+          vTrack.getSettings = () => Object.assign({}, origGetSettings(), { displaySurface: 'browser' });
+          vTrack.getCaptureHandle = () => ({ handle: currentCaptureHandle });
+
+          let aTrack = null;
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) {
+              const audioCtx = new AudioCtx();
+              const dest = audioCtx.createMediaStreamDestination();
+              aTrack = dest.stream.getAudioTracks()[0];
+            }
+          } catch (e) {}
+
+          const tracks = [vTrack];
+          if (aTrack) tracks.push(aTrack);
+
+          const stream = new MediaStream(tracks);
+          vTrack.addEventListener('ended', () => { animRunning = false; });
+          return stream;
+        }
+
+        if (typeof MediaDevices !== 'undefined' && MediaDevices.prototype) {
+          MediaDevices.prototype.getDisplayMedia = automatedGetDisplayMedia;
+        }
+        if (navigator.mediaDevices) {
+          navigator.mediaDevices.getDisplayMedia = automatedGetDisplayMedia;
+        }
+
+        window.showSaveFilePicker = async function(options) {
+          console.log('[AutoMeet Inpage] showSaveFilePicker intercepted:', options);
+          const filename = options?.suggestedName || ('AutoMeet_' + Date.now() + '.webm');
+          const chunks = [];
+          let position = 0;
+
+          return {
+            kind: 'file',
+            name: filename,
+            createWritable: async function() {
+              return {
+                write: async function(chunk) {
+                  if (position === 0 && chunks.length > 0) {
+                    chunks[0] = chunk;
+                  } else {
+                    chunks.push(chunk);
+                  }
+                  position += (chunk.byteLength || chunk.size || 0);
+                },
+                seek: async function(pos) { position = pos; },
+                close: async function() {
+                  try {
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    window.postMessage({
+                      action: 'AUTOMEET_LOCAL_REC_SAVED',
+                      blobUrl: blobUrl,
+                      filename: filename
+                    }, '*');
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => { a.remove(); URL.revokeObjectURL(blobUrl); }, 60000);
+                    console.log('[AutoMeet Inpage] Tự động tải video Local Recording:', filename);
+                  } catch (e) {
+                    console.error('[AutoMeet Inpage] Lỗi khi lưu file:', e);
+                  }
+                }
+              };
+            }
+          };
+        };
+
+        async function startLocalRecordingWithRetry() {
+          console.log('[AutoMeet Inpage] Bắt đầu tiến trình kích hoạt Local Recording...');
+          for (let attempt = 0; attempt < 30; attempt++) {
+            const store = window.APP?.store;
+            const state = store?.getState();
+            const confState = state?.['features/base/conference'];
+            const isJoined = Boolean(confState?.conference);
+
+            if (store && isJoined) {
+              const isAlreadyRunning = Boolean(state?.['features/recording']?.localRecordingRunning);
+              if (isAlreadyRunning) {
+                console.log('[AutoMeet Inpage] Local Recording đã đang chạy!');
+                return;
+              }
+              console.log('[AutoMeet Inpage] Đã vào phòng họp. Dispatch START_LOCAL_RECORDING vào Jitsi Redux...');
+              try {
+                store.dispatch({ type: 'START_LOCAL_RECORDING', onlySelf: false });
+              } catch (err) {
+                console.warn('[AutoMeet Inpage] Dispatch error:', err);
+              }
+              return;
+            }
+            await new Promise(r => setTimeout(r, 500));
+          }
+          console.warn('[AutoMeet Inpage] Timeout chờ vào phòng họp (15s).');
+        }
+
+        function stopLocalRecording() {
+          const store = window.APP?.store;
+          if (store) {
+            console.log('[AutoMeet Inpage] Dispatch STOP_LOCAL_RECORDING vào Jitsi Redux...');
+            try { store.dispatch({ type: 'STOP_LOCAL_RECORDING' }); } catch (err) {}
+          }
+        }
+
+        window.addEventListener('message', function(event) {
+          if (!event.data || !event.data.type) return;
+          if (event.data.type === 'AUTOMEET_DISPATCH_START_LOCAL_REC') {
+            startLocalRecordingWithRetry();
+          } else if (event.data.type === 'AUTOMEET_DISPATCH_STOP_LOCAL_REC') {
+            stopLocalRecording();
+          }
+        });
+
+        setInterval(() => {
+          try {
+            const state = window.APP?.store?.getState();
+            const isRunning = Boolean(state?.['features/recording']?.localRecordingRunning);
+            window.postMessage({ type: 'AUTOMEET_SYNC_RECORDING_STATE', isRunning: isRunning }, '*');
+          } catch (e) {}
+        }, 1000);
+      }.toString()})();`;
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+      console.log('[AutoMeet Content] Đã nhúng inpage hooks inline thành công');
+    } catch (e) {
+      console.warn('[AutoMeet Content] Không thể nhúng inpage hooks:', e);
+    }
   }
 
   /**
@@ -339,25 +533,27 @@
     const { inSlot, activeSchedule } = utils.checkCurrentSlot(currentSettings.schedules);
 
     if (inSlot && activeSchedule) {
-      // Đang trong khung giờ một ca làm việc
-      // CHỈ KÍCH HOẠT ĐÚNG 1 LẦN CHO MỖI CA (Tránh lặp lại nhiều lần gây spam thông báo)
-      if (currentActiveSlotId !== activeSchedule.id && !isStartingRecording && !isRecordingActive) {
-        console.log(`[AutoMeet] Bắt đầu ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Record tự động...`);
-        currentActiveSlotId = activeSchedule.id;
-        isStartingRecording = true;
-        showToast(`⏰ Đến ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}): Tự động kích hoạt Record...`);
+      // Đang trong khung giờ một ca làm việc: Nếu chưa ghi hình thì thử lại sau mỗi 5s cho tới khi thành công
+      if (!isRecordingActive && !isStartingRecording) {
+        const now = Date.now();
+        if (now - lastRecordAttemptTime > 5000) {
+          lastRecordAttemptTime = now;
+          console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), tự động kích hoạt Record...`);
+          isStartingRecording = true;
+          showToast(`⏰ Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}): Tự động kích hoạt Record...`);
 
-        try {
-          await triggerStartRecording();
-        } catch (err) {
-          console.warn('[AutoMeet] Lỗi khi tự động kích hoạt Record:', err);
-        } finally {
-          isStartingRecording = false;
+          try {
+            await triggerStartRecording();
+          } catch (err) {
+            console.warn('[AutoMeet] Lỗi khi tự động kích hoạt Record:', err);
+          } finally {
+            isStartingRecording = false;
+          }
         }
       }
     } else {
       // Không nằm trong bất kỳ ca làm việc nào đang bật -> Tự động dừng Record và lưu video
-      if (isRecordingActive || currentActiveSlotId !== null) {
+      if (isRecordingActive) {
         console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Record và lưu file...`);
         showToast(`⏰ Đã hết ca làm việc: Tự động dừng Record và lưu video...`);
         isStoppingRecording = true;
@@ -367,7 +563,6 @@
           console.warn('[AutoMeet] Lỗi khi tự động dừng Record:', err);
         } finally {
           isStoppingRecording = false;
-          currentActiveSlotId = null;
         }
       }
     }

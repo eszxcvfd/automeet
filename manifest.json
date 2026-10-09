@@ -60,5 +60,15 @@
   ],
   "host_permissions": [
     "https://meet.jit.si/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content/inpage.js"
+      ],
+      "matches": [
+        "https://meet.jit.si/*"
+      ]
+    }
   ]
 }
