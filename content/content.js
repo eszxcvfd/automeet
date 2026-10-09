@@ -114,6 +114,7 @@
       handlePrejoinScreen();
       handleLoginScreen();
       autoDismissPopups();
+      autoDismissRecordDialogIfRecording();
       checkSlotScheduleAutoRecord();
       updateHUD();
       removeAnyOnScreenPills();
@@ -128,6 +129,32 @@
     if (pill) pill.remove();
     const existingToasts = document.querySelectorAll('.automeet-toast');
     existingToasts.forEach(t => t.remove());
+  }
+
+  /**
+   * Tự động đóng hộp thoại Record và More actions nếu còn treo trên màn hình khi đang ghi hình
+   */
+  function autoDismissRecordDialogIfRecording() {
+    if (!isRecordingActive) return;
+
+    // Tìm nút đóng 'X' trên modal dialog Record
+    const closeBtn = document.querySelector(
+      '#modal-header-close-button, [aria-label="Close dialog"], [aria-label="Đóng hộp thoại"], .modal-header-close-button'
+    );
+    if (closeBtn && closeBtn.offsetParent !== null) {
+      console.log('[AutoMeet Content] Tự động đóng hộp thoại Record còn sót lại trên màn hình...');
+      simulateUserClick(closeBtn);
+      closeBtn.click();
+    }
+
+    // Thu gọn menu More actions nếu đang mở
+    const moreBtn = document.querySelector(
+      '[aria-label="More actions"][aria-expanded="true"], [aria-label="Thao tác khác"][aria-expanded="true"]'
+    );
+    if (moreBtn) {
+      simulateUserClick(moreBtn);
+      moreBtn.click();
+    }
   }
 
   /**
@@ -272,7 +299,7 @@
       // Đang trong ca làm việc: nếu chưa ghi hình, kích hoạt Local Recording
       if (!isRecordingActive && !isStartingRecording) {
         const now = Date.now();
-        if (now - lastRecordAttemptTime > 4000) {
+        if (now - lastRecordAttemptTime > 10000) {
           lastRecordAttemptTime = now;
           isStartingRecording = true;
           console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Local Record...`);
