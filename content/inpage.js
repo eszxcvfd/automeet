@@ -53,6 +53,192 @@
   }
 
   /**
+   * Bộ đệm tệp ảo (Virtual File Stream) mô phỏng FileSystemWritableFileStream chuẩn W3C.
+   * Giải quyết triệt để vấn đề "thời lượng 240:00:00" của Jitsi Meet:
+   * - Khi bắt đầu, Jitsi gọi fixDuration với 864,000,000 ms (240 giờ) để dự trữ chỗ trong header WebM.
+   * - Khi kết thúc, Jitsi gọi stream.seek(0) và stream.write(...) để ghi đè thời lượng thực tế (ví dụ: 50 giây).
+   * - VirtualFileStream xử lý chính xác thao tác seek(0) ghi đè lên header thay vì nối vào cuối file.
+   * - Ngoài ra, hàm getFinalBlob() tự động quét kiểm tra và vá trực tiếp trường Duration EBML
+   *   nếu giá trị dự trữ 240h chưa được thay thế, đảm bảo 100% video xuất ra có thời lượng thực tế chuẩn xác.
+   */
+  class VirtualFileStream {
+    constructor() {
+      this.chunks = []; // Danh sách các block: { offset: number, blob: Blob, size: number }
+      this.cursor = 0;
+      this.size = 0;
+      this.recordingStartTime = Date.now();
+    }
+
+    async write(data) {
+      if (!data) return;
+
+      // Hỗ trợ tham số chuẩn FileSystemWriteChunkType: { type: 'seek' | 'truncate' | 'write', ... }
+      if (typeof data === 'object' && !(data instanceof Blob) && !(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) {
+        if (data.type === 'seek') {
+          this.seek(data.position);
+          return;
+        }
+        if (data.type === 'truncate') {
+          this.truncate(data.size);
+          return;
+        }
+        if (data.type === 'write') {
+          if (typeof data.position === 'number') {
+            this.seek(data.position);
+          }
+          data = data.data;
+        }
+      }
+
+      const blob = data instanceof Blob ? data : new Blob([data]);
+      const blobSize = blob.size;
+
+      // 1. Trường hợp tuần tự: cursor nằm ở cuối file -> Nối tiếp chunk mới
+      if (this.cursor === this.size) {
+        this.chunks.push({ offset: this.cursor, blob: blob, size: blobSize });
+        this.cursor += blobSize;
+        this.size = this.cursor;
+        return;
+      }
+
+      // 2. Trường hợp đặc biệt: Ghi đè từ đầu file (seek(0) của Jitsi để sửa metadata thời lượng)
+      if (this.cursor === 0) {
+        if (this.chunks.length > 0 && this.chunks[0].size === blobSize) {
+          console.log('[AutoMeet Inpage] Ghi đè header WebM bằng chunk thời lượng thực tế (kích thước khớp):', blobSize);
+          this.chunks[0] = { offset: 0, blob: blob, size: blobSize };
+          this.cursor = blobSize;
+          return;
+        }
+
+        console.log('[AutoMeet Inpage] Ghi đè header WebM (kích thước khác):', blobSize, 'chunk cũ:', this.chunks[0]?.size);
+        const newChunks = [{ offset: 0, blob: blob, size: blobSize }];
+        const skipBytes = blobSize;
+
+        for (let i = 0; i < this.chunks.length; i++) {
+          const c = this.chunks[i];
+          const chunkEnd = c.offset + c.size;
+          if (chunkEnd <= skipBytes) {
+            continue;
+          } else if (c.offset < skipBytes && chunkEnd > skipBytes) {
+            const sliceStart = skipBytes - c.offset;
+            const sliced = c.blob.slice(sliceStart);
+            newChunks.push({ offset: skipBytes, blob: sliced, size: sliced.size });
+          } else {
+            newChunks.push(c);
+          }
+        }
+
+        this.chunks = newChunks;
+        this.cursor = blobSize;
+        this.size = Math.max(this.size, this.cursor);
+        return;
+      }
+
+      // 3. Trường hợp ghi đè tại vị trí cursor bất kỳ
+      const beforeChunks = [];
+      const afterChunks = [];
+
+      for (const c of this.chunks) {
+        const cEnd = c.offset + c.size;
+        if (cEnd <= this.cursor) {
+          beforeChunks.push(c);
+        } else if (c.offset < this.cursor && cEnd > this.cursor) {
+          const keepSlice = c.blob.slice(0, this.cursor - c.offset);
+          beforeChunks.push({ offset: c.offset, blob: keepSlice, size: keepSlice.size });
+        }
+
+        const writeEnd = this.cursor + blobSize;
+        if (c.offset >= writeEnd) {
+          afterChunks.push(c);
+        } else if (c.offset < writeEnd && cEnd > writeEnd) {
+          const keepSlice = c.blob.slice(writeEnd - c.offset);
+          afterChunks.push({ offset: writeEnd, blob: keepSlice, size: keepSlice.size });
+        }
+      }
+
+      this.chunks = [...beforeChunks, { offset: this.cursor, blob: blob, size: blobSize }, ...afterChunks];
+      this.cursor += blobSize;
+      this.size = Math.max(this.size, this.cursor);
+    }
+
+    seek(pos) {
+      this.cursor = Math.max(0, Number(pos) || 0);
+    }
+
+    truncate(size) {
+      const targetSize = Math.max(0, Number(size) || 0);
+      if (targetSize >= this.size) return;
+
+      const newChunks = [];
+      for (const c of this.chunks) {
+        if (c.offset + c.size <= targetSize) {
+          newChunks.push(c);
+        } else if (c.offset < targetSize) {
+          const sliced = c.blob.slice(0, targetSize - c.offset);
+          newChunks.push({ offset: c.offset, blob: sliced, size: sliced.size });
+        }
+      }
+      this.chunks = newChunks;
+      this.size = targetSize;
+      if (this.cursor > this.size) {
+        this.cursor = this.size;
+      }
+    }
+
+    async getFinalBlob() {
+      if (this.chunks.length === 0) return null;
+
+      const rawBlob = new Blob(this.chunks.map(c => c.blob), { type: 'video/webm' });
+      const actualDurationMs = Math.max(1000, Date.now() - this.recordingStartTime);
+
+      // Quét và vá trường EBML Duration nếu header vẫn còn chứa 240:00:00 (864,000,000 ms)
+      try {
+        const headerSize = Math.min(rawBlob.size, 65536);
+        const headerSlice = rawBlob.slice(0, headerSize);
+        const arrayBuf = await headerSlice.arrayBuffer();
+        const u8 = new Uint8Array(arrayBuf);
+
+        let patched = false;
+        // EBML Duration Element ID là 0x44 0x89
+        for (let i = 0; i < u8.length - 11; i++) {
+          if (u8[i] === 0x44 && u8[i + 1] === 0x89) {
+            const size = u8[i + 2];
+            if (size === 0x88) { // Float64 (8 bytes)
+              const view = new DataView(arrayBuf, i + 3, 8);
+              const val = view.getFloat64(0, false);
+              // Nếu thời lượng là 240 giờ hoặc không hợp lệ -> Ghi đè thời lượng thực tế
+              if (val >= 860000000 || val <= 0 || isNaN(val) || !isFinite(val)) {
+                console.log(`[AutoMeet Inpage] Phát hiện thời lượng không chuẩn (${val} ms). Tự động cập nhật về thời lượng thực tế: ${actualDurationMs} ms`);
+                view.setFloat64(0, actualDurationMs, false);
+                patched = true;
+              }
+              break;
+            } else if (size === 0x84) { // Float32 (4 bytes)
+              const view = new DataView(arrayBuf, i + 3, 4);
+              const val = view.getFloat32(0, false);
+              if (val >= 860000000 || val <= 0 || isNaN(val) || !isFinite(val)) {
+                console.log(`[AutoMeet Inpage] Phát hiện thời lượng float32 không chuẩn (${val} ms). Tự động cập nhật: ${actualDurationMs} ms`);
+                view.setFloat32(0, actualDurationMs, false);
+                patched = true;
+              }
+              break;
+            }
+          }
+        }
+
+        if (patched) {
+          const remainingBlob = rawBlob.slice(headerSize);
+          return new Blob([arrayBuf, remainingBlob], { type: 'video/webm' });
+        }
+      } catch (err) {
+        console.warn('[AutoMeet Inpage] Lỗi kiểm tra EBML header:', err);
+      }
+
+      return rawBlob;
+    }
+  }
+
+  /**
    * HOOK: window.showSaveFilePicker
    * Jitsi Meet Local Recording gọi hàm này để mở hộp thoại "Save As".
    * Chúng ta thu thập chunks ghi hình và tự động lưu vào thư mục người dùng đã chọn trước,
@@ -60,28 +246,29 @@
    */
   if (typeof window.showSaveFilePicker !== 'undefined') {
     window.showSaveFilePicker = async function (options) {
-      console.log('[AutoMeet Inpage] showSaveFilePicker called by Jitsi. Providing automatic stream to saved location...');
+      console.log('[AutoMeet Inpage] showSaveFilePicker called by Jitsi. Providing automatic stream with accurate duration...');
 
-      const chunks = [];
+      const virtualStream = new VirtualFileStream();
       let isClosed = false;
 
-      // 1. Thử ghi trực tiếp vào FileSystemDirectoryHandle nếu người dùng đã cấp quyền trên trang
+      // 1. Chuẩn bị tên file chuẩn
+      const now = new Date();
+      const y = now.getFullYear();
+      const mo = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const h = String(now.getHours()).padStart(2, '0');
+      const mi = String(now.getMinutes()).padStart(2, '0');
+      const s = String(now.getSeconds()).padStart(2, '0');
+      const room = window.location.pathname.replace(/^\/+|\/+$/g, '') || 'StaffMeet';
+      const cleanFilename = `${room}_${y}-${mo}-${d}_${h}-${mi}-${s}.webm`;
+
+      // 2. Thử ghi trực tiếp vào FileSystemDirectoryHandle nếu người dùng đã cấp quyền trên trang
       let directWritable = null;
       try {
         const dirHandle = await getSavedDirectoryHandle();
         if (dirHandle && typeof dirHandle.getFileHandle === 'function') {
           const perm = await dirHandle.queryPermission({ mode: 'readwrite' });
           if (perm === 'granted') {
-            const now = new Date();
-            const y = now.getFullYear();
-            const mo = String(now.getMonth() + 1).padStart(2, '0');
-            const d = String(now.getDate()).padStart(2, '0');
-            const h = String(now.getHours()).padStart(2, '0');
-            const mi = String(now.getMinutes()).padStart(2, '0');
-            const s = String(now.getSeconds()).padStart(2, '0');
-            const room = window.location.pathname.replace(/^\/+|\/+$/g, '') || 'StaffMeet';
-            const cleanFilename = `${room}_${y}-${mo}-${d}_${h}-${mi}-${s}.webm`;
-
             const targetFileHandle = await dirHandle.getFileHandle(cleanFilename, { create: true });
             directWritable = await targetFileHandle.createWritable();
             console.log('[AutoMeet Inpage] Đã mở luồng ghi trực tiếp vào thư mục đã chọn:', cleanFilename);
@@ -93,17 +280,19 @@
 
       const mockWritable = {
         write: async function (data) {
-          chunks.push(data);
+          await virtualStream.write(data);
           if (directWritable) {
             try { await directWritable.write(data); } catch (e) {}
           }
         },
         seek: async function (pos) {
+          virtualStream.seek(pos);
           if (directWritable) {
             try { await directWritable.seek(pos); } catch (e) {}
           }
         },
         truncate: async function (size) {
+          virtualStream.truncate(size);
           if (directWritable) {
             try { await directWritable.truncate(size); } catch (e) {}
           }
@@ -111,32 +300,32 @@
         close: async function () {
           if (isClosed) return;
           isClosed = true;
-          console.log('[AutoMeet Inpage] Writable stream closed. Collected chunks:', chunks.length);
 
-          if (directWritable) {
-            try { await directWritable.close(); } catch (e) {}
-          }
-
-          if (chunks.length === 0) {
-            console.warn('[AutoMeet Inpage] Chunks trống, bỏ qua lưu file.');
+          const finalBlob = await virtualStream.getFinalBlob();
+          if (!finalBlob || finalBlob.size === 0) {
+            console.warn('[AutoMeet Inpage] Video trống, bỏ qua lưu file.');
+            if (directWritable) {
+              try { await directWritable.close(); } catch (e) {}
+            }
             return;
           }
 
-          const blob = new Blob(chunks, { type: 'video/webm' });
-          console.log('[AutoMeet Inpage] Video hoàn tất, dung lượng:', blob.size, 'bytes');
+          console.log('[AutoMeet Inpage] Video hoàn tất với thời lượng chuẩn xác, dung lượng:', finalBlob.size, 'bytes');
 
-          // Đặt tên file chuẩn: Staff{Năm}W{Tuần}T{Thứ}_{ThờiGian}.webm
-          const now = new Date();
-          const y = now.getFullYear();
-          const mo = String(now.getMonth() + 1).padStart(2, '0');
-          const d = String(now.getDate()).padStart(2, '0');
-          const h = String(now.getHours()).padStart(2, '0');
-          const mi = String(now.getMinutes()).padStart(2, '0');
-          const s = String(now.getSeconds()).padStart(2, '0');
-          const room = window.location.pathname.replace(/^\/+|\/+$/g, '') || 'StaffMeet';
-          const cleanFilename = `${room}_${y}-${mo}-${d}_${h}-${mi}-${s}.webm`;
+          // Đảm bảo ghi file chuẩn có thời lượng thực tế vào thư mục đã chọn
+          if (directWritable) {
+            try {
+              await directWritable.seek(0);
+              await directWritable.write(finalBlob);
+              await directWritable.truncate(finalBlob.size);
+              await directWritable.close();
+              console.log('[AutoMeet Inpage] Đã ghi hoàn tất file trực tiếp vào thư mục đã chọn:', cleanFilename);
+            } catch (e) {
+              console.warn('[AutoMeet Inpage] Lỗi khi hoàn tất directWritable:', e);
+            }
+          }
 
-          const blobUrl = URL.createObjectURL(blob);
+          const blobUrl = URL.createObjectURL(finalBlob);
 
           // 1. Tải về máy qua thẻ <a>
           const a = document.createElement('a');
@@ -145,7 +334,7 @@
           a.download = cleanFilename;
           document.body.appendChild(a);
           a.click();
-          console.log(`[AutoMeet Inpage] Đã kích hoạt lưu video: ${cleanFilename}`);
+          console.log(`[AutoMeet Inpage] Đã kích hoạt lưu video chuẩn: ${cleanFilename}`);
 
           setTimeout(() => {
             a.remove();
@@ -156,16 +345,15 @@
             type: 'AUTOMEET_FILE_RECORDED',
             url: blobUrl,
             filename: cleanFilename,
-            size: blob.size
+            size: finalBlob.size
           }, '*');
         }
       };
 
       return {
         kind: 'file',
-        name: options?.suggestedName || 'recording.webm',
+        name: cleanFilename,
         createWritable: async function () {
-          chunks.length = 0;
           isClosed = false;
           return mockWritable;
         }
