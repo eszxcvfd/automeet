@@ -70,11 +70,12 @@
 
     checkTimer = setInterval(() => {
       handlePrejoinScreen();
+      handleLoginScreen();
       autoDismissPopups();
       checkRecordingState();
       checkSlotScheduleAutoRecord();
       updateHUD();
-    }, 2000);
+    }, 1500);
   }
 
   /**
@@ -120,14 +121,85 @@
     if (currentSettings?.autoJoinPrejoin) {
       for (const sel of joinSelectors) {
         const joinBtn = document.querySelector(sel);
-        if (joinBtn && joinBtn.offsetParent !== null) {
-          console.log('[AutoMeet] Phát hiện nút Join meeting, tự động bấm...');
+        if (joinBtn && joinBtn.offsetParent !== null && !joinBtn.classList.contains('disabled')) {
+          console.log('[AutoMeet] Phát hiện nút Join meeting, tự động bấm...', joinBtn);
           simulateUserClick(joinBtn);
           joinBtn.click();
           break;
         }
       }
     }
+  }
+
+  /**
+   * Kiểm tra xem có đang ở màn hình yêu cầu Login/Host không
+   */
+  function isLoginScreen() {
+    return !!(
+      document.querySelector('[data-testid="lobby.loginButton"], button.lobby-button-margin, .lobby-screen') ||
+      Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]')).some(b => {
+        if (b.closest('#automeet-hud-container, .automeet-toast, #new-toolbox, .new-toolbox')) return false;
+        if (b.offsetParent === null) return false;
+        const text = (b.textContent || '').trim().toLowerCase();
+        return text === 'log-in' || text === 'login' || text === 'log in' || text === 'i am the host' || text.includes('i am the host') || text.includes('tôi là người chủ trì');
+      })
+    );
+  }
+
+  /**
+   * Tự động bấm nút Log-in nếu gặp màn hình yêu cầu đăng nhập/chủ trì để vào phòng họp
+   */
+  function handleLoginScreen() {
+    const loginSelectors = [
+      '[data-testid="lobby.loginButton"]',
+      'button.lobby-button-margin',
+      '.lobby-screen button',
+      'button[data-testid*="login" i]',
+      'button[data-testid*="moderator" i]',
+      'button[data-testid*="auth" i]',
+      '.login-button',
+      '#login_button'
+    ];
+
+    for (const sel of loginSelectors) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null && !btn.classList.contains('disabled')) {
+        console.log('[AutoMeet] Phát hiện nút Log-in theo selector, tự động bấm để vào phòng họp:', btn);
+        showToast('🔑 Tự động bấm nút Log-in để vào phòng họp...');
+        simulateUserClick(btn);
+        btn.click();
+        return true;
+      }
+    }
+
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a.button'));
+    for (const b of buttons) {
+      if (b.closest('#automeet-hud-container, .automeet-toast, #new-toolbox, .new-toolbox')) continue;
+      if (b.offsetParent === null) continue;
+
+      const text = (b.textContent || '').trim().toLowerCase();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      const testid = (b.getAttribute('data-testid') || '').toLowerCase();
+
+      const isLogin = 
+        text === 'log-in' || text === 'login' || text === 'log in' ||
+        text === 'đăng nhập' || text === 'i am the host' || text === 'tôi là người chủ trì' ||
+        text.includes('i am the host') || text.includes('tôi là người chủ trì') ||
+        (text.includes('log-in') && text.length < 35) ||
+        (text.includes('login') && text.length < 35) ||
+        aria.includes('log-in') || aria.includes('login') || aria.includes('i am the host') ||
+        testid.includes('login') || testid.includes('moderator');
+
+      if (isLogin) {
+        console.log('[AutoMeet] Phát hiện nút Log-in/Chủ trì theo nội dung, tự động bấm:', b);
+        showToast('🔑 Tự động bấm nút Log-in / Host để vào phòng họp...');
+        simulateUserClick(b);
+        b.click();
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -166,6 +238,11 @@
     // Nếu đang ở màn hình chờ Pre-join, ưu tiên bấm Tham gia
     if (isPrejoinScreen()) {
       handlePrejoinScreen();
+      return;
+    }
+
+    // Nếu đang ở màn hình chờ Login/Host, ưu tiên bấm Log-in
+    if (handleLoginScreen()) {
       return;
     }
 
@@ -461,7 +538,13 @@
       return;
     }
 
-    // 2. Luôn đảm bảo TabCapture nền được kích hoạt song song (Dual Engine)
+    // 2. Nếu đang ở màn hình yêu cầu Login/Host, tự động bấm Log-in để vào giao diện cuộc họp
+    if (handleLoginScreen()) {
+      showToast('⚡ Tự động bấm nút Log-in để vào giao diện cuộc họp...');
+      await sleep(1500);
+    }
+
+    // 3. Luôn đảm bảo TabCapture nền được kích hoạt song song (Dual Engine)
     try {
       if (chrome?.runtime?.sendMessage) {
         chrome.runtime.sendMessage({ action: 'START_TAB_CAPTURE' }).catch(() => {});
