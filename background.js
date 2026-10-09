@@ -1,7 +1,7 @@
 /**
  * AutoMeet - Service Worker (Background)
  * Quản lý lịch trình tự động 100%, tự động mở phòng khi mở trình duyệt,
- * điều phối Tab Capture ngầm và tự động lưu video mà không cần người dùng can thiệp.
+ * điều phối TabCapture ngầm và tự động lưu video vào thư mục Downloads mà không cần người dùng can thiệp.
  */
 
 // Nạp file utils.js trong môi trường Service Worker
@@ -16,6 +16,7 @@ const utils = self.AutoMeetUtils;
 let lastActiveSlotId = null;
 let isScheduleActive = false;
 let isCapturingTab = false;
+let activeRecordingTabId = null;
 
 // 1. Khi Extension được cài đặt hoặc cập nhật
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -75,8 +76,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Lắng nghe khi tab Jitsi được mở hoặc tải lại trang
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.includes('meet.jit.si')) {
-    // Đợi 3 giây rồi kiểm tra đồng bộ lịch
-    setTimeout(syncScheduleState, 3000);
+    // Đợi 2 giây rồi kiểm tra đồng bộ lịch
+    setTimeout(syncScheduleState, 2000);
+  }
+});
+
+// Khi tab bị đóng: nếu tab đang ghi hình bị đóng, dừng ghi hình
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (activeRecordingTabId === tabId) {
+    console.log('[AutoMeet Background] Tab đang ghi hình đã bị đóng -> Dừng TabCapture...');
+    stopTabCaptureRecording();
   }
 });
 
@@ -105,8 +114,8 @@ async function syncScheduleState() {
       justCreated = true;
     }
 
-    // 2. Kích hoạt Record tự động cho ca này
-    if (lastActiveSlotId !== activeSched.id || !isScheduleActive) {
+    // 2. Kích hoạt Record tự động cho ca này nếu chưa kích hoạt
+    if (!isCapturingTab || lastActiveSlotId !== activeSched.id) {
       lastActiveSlotId = activeSched.id;
       isScheduleActive = true;
 
@@ -115,54 +124,32 @@ async function syncScheduleState() {
           type: 'basic',
           iconUrl: 'icons/icon-48.png',
           title: `AutoMeet: ${activeSched.name}`,
-          message: `Đang tự động mở cuộc họp ${todayRoom} và kích hoạt Record (${activeSched.start} - ${activeSched.end}).`
+          message: `Tự động mở phòng họp ${todayRoom} và bắt đầu ghi hình ca (${activeSched.start} - ${activeSched.end}).`
         });
       }
 
-      // Kích hoạt ghi hình ngầm bằng TabCapture Offscreen
       if (tab) {
-        const delay = justCreated ? 6000 : 2500;
+        const delay = justCreated ? 4000 : 1500;
         setTimeout(async () => {
           await startTabCaptureRecording(tab, activeSched, todayRoom);
-
-          // Đồng thời gửi lệnh kích hoạt giao diện Jitsi nếu cần
-          try {
-            await chrome.tabs.sendMessage(tab.id, {
-              action: 'START_RECORDING',
-              schedule: activeSched
-            });
-          } catch (e) {
-            // bỏ qua nếu tab chưa load xong script
-          }
         }, delay);
       }
     }
   } else {
     // Không nằm trong khung giờ ca nào
-    if (isScheduleActive) {
+    if (isScheduleActive || isCapturingTab) {
       console.log('[AutoMeet Background] Đã hết ca lịch trình, tự động dừng Record...');
       isScheduleActive = false;
       lastActiveSlotId = null;
 
-      // 1. Dừng ghi hình ngầm Offscreen
       await stopTabCaptureRecording();
-
-      // 2. Gửi lệnh dừng giao diện Jitsi
-      const tab = await findExistingMeetingTab(todayRoom);
-      if (tab) {
-        try {
-          await chrome.tabs.sendMessage(tab.id, { action: 'STOP_RECORDING' });
-        } catch (err) {
-          // ignore
-        }
-      }
 
       if (settings.notifyOnRecord && chrome.notifications) {
         chrome.notifications.create({
           type: 'basic',
           iconUrl: 'icons/icon-48.png',
           title: 'AutoMeet: Kết thúc ca trực',
-          message: 'Đã tự động kết thúc ca và lưu video vào thư mục Downloads/AutoMeet!'
+          message: 'Đã tự động dừng ghi hình và lưu video vào thư mục Downloads!'
         });
       }
     }
@@ -170,20 +157,37 @@ async function syncScheduleState() {
 }
 
 /**
- * Đảm bảo Offscreen Document đã tồn tại
+ * Đảm bảo Offscreen Document đã tồn tại và sẵn sàng nhận message (Handshake)
  */
 async function ensureOffscreenDocument() {
-  if (chrome.offscreen) {
-    const existing = await chrome.offscreen.hasDocument();
-    if (!existing) {
-      await chrome.offscreen.createDocument({
-        url: 'offscreen/offscreen.html',
-        reasons: ['USER_MEDIA'],
-        justification: 'Automated background tab audio and video recording for scheduled meeting'
+  if (!chrome.offscreen) return;
+  const existing = await chrome.offscreen.hasDocument();
+  if (!existing) {
+    await chrome.offscreen.createDocument({
+      url: 'offscreen/offscreen.html',
+      reasons: ['USER_MEDIA'],
+      justification: 'Automated background tab audio and video recording for scheduled meeting'
+    });
+    console.log('[AutoMeet Background] Đã tạo Offscreen Document');
+  }
+
+  // Ping offscreen document kiểm tra phản hồi để chắc chắn listener đã sẵn sàng
+  for (let i = 0; i < 10; i++) {
+    try {
+      const isAlive = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'GET_OFFSCREEN_STATUS' }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve(false);
+          } else {
+            resolve(true);
+          }
+        });
       });
-      console.log('[AutoMeet Background] Đã tạo Offscreen Document thành công');
-      await new Promise(r => setTimeout(r, 600));
-    }
+      if (isAlive) {
+        return;
+      }
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 200));
   }
 }
 
@@ -195,16 +199,18 @@ function removeVietnameseTones(str) {
   return str
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D')
+    .replace(/[đĐ]/g, 'd')
     .replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
 /**
- * Bắt đầu ghi hình ngầm bằng TabCapture (Hoàn toàn tự động không cần người dùng xác nhận)
+ * Bắt đầu ghi hình ngầm bằng TabCapture (Hoàn toàn tự động, video chuẩn 1080p, không màn hình đen, không popup xin quyền)
  */
 async function startTabCaptureRecording(tab, scheduleItem, roomName) {
-  if (isCapturingTab) return;
+  if (isCapturingTab) {
+    console.log('[AutoMeet Background] TabCapture đang hoạt động rồi, không khởi chạy lại.');
+    return;
+  }
 
   try {
     await ensureOffscreenDocument();
@@ -213,7 +219,7 @@ async function startTabCaptureRecording(tab, scheduleItem, roomName) {
       const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       if (streamId) {
         const now = new Date();
-        const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+        const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
         const safeSched = removeVietnameseTones(scheduleItem?.name || 'Ca');
         const filename = `${roomName}_${safeSched}_${dateStr}.webm`;
 
@@ -221,14 +227,30 @@ async function startTabCaptureRecording(tab, scheduleItem, roomName) {
           action: 'START_OFFSCREEN_RECORDING',
           streamId: streamId,
           filename: filename
-        });
+        }, (res) => {
+          if (chrome.runtime.lastError || !res?.success) {
+            console.error('[AutoMeet Background] Không thể khởi tạo Offscreen Recording:', chrome.runtime.lastError, res);
+            isCapturingTab = false;
+            activeRecordingTabId = null;
+          } else {
+            isCapturingTab = true;
+            activeRecordingTabId = tab.id;
+            console.log(`[AutoMeet Background] TabCapture bắt đầu thành công cho tab ${tab.id}, lưu file: ${filename}`);
 
-        isCapturingTab = true;
-        console.log(`[AutoMeet Background] Đã kích hoạt TabCapture cho tab ${tab.id}, lưu thành file: ${filename}`);
+            // Thông báo tab bật biểu tượng REC đỏ chính thức của Jitsi
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'ON_RECORDING_STARTED',
+              filename: filename,
+              schedule: scheduleItem
+            }).catch(() => {});
+          }
+        });
       }
     }
   } catch (err) {
     console.warn('[AutoMeet Background] Lỗi khởi tạo TabCapture:', err);
+    isCapturingTab = false;
+    activeRecordingTabId = null;
   }
 }
 
@@ -238,10 +260,21 @@ async function startTabCaptureRecording(tab, scheduleItem, roomName) {
 async function stopTabCaptureRecording() {
   if (!isCapturingTab) return;
   isCapturingTab = false;
+  const oldTabId = activeRecordingTabId;
+  activeRecordingTabId = null;
 
   try {
     chrome.runtime.sendMessage({ action: 'STOP_OFFSCREEN_RECORDING' });
     console.log('[AutoMeet Background] Đã gửi lệnh STOP_OFFSCREEN_RECORDING');
+
+    // Thông báo cho các tab Jitsi tắt biểu tượng REC
+    if (oldTabId) {
+      chrome.tabs.sendMessage(oldTabId, { action: 'ON_RECORDING_STOPPED' }).catch(() => {});
+    }
+    const allTabs = await chrome.tabs.query({ url: '*://meet.jit.si/*' });
+    for (const t of allTabs) {
+      chrome.tabs.sendMessage(t.id, { action: 'ON_RECORDING_STOPPED' }).catch(() => {});
+    }
   } catch (err) {
     console.warn('[AutoMeet Background] Lỗi dừng TabCapture:', err);
   }
@@ -313,22 +346,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const todayUrl = utils ? utils.getMeetingUrl(now) : '';
 
     if (request.action === 'SAVE_RECORDING_BLOB') {
-      // TỰ ĐỘNG TẢI FILE VỀ THƯ MỤC DOWNLOADS MÀ KHÔNG HỎI NGƯỜI DÙNG (saveAs: false)
+      // TỰ ĐỘNG TẢI FILE THẲNG VÀO THƯ MỤC DOWNLOADS (saveAs: false)
       if (chrome.downloads && request.blobUrl) {
-        console.log('[AutoMeet Background] Đang tự động lưu file video:', request.filename);
+        console.log('[AutoMeet Background] Đang tự động lưu file video vào Downloads:', request.filename);
         chrome.downloads.download({
           url: request.blobUrl,
-          filename: `AutoMeet/${request.filename}`,
+          filename: request.filename,
           saveAs: false
         }, (downloadId) => {
-          console.log('[AutoMeet Background] File đã được tải xuống, downloadId:', downloadId);
-          if (chrome.notifications) {
-            chrome.notifications.create({
-              type: 'basic',
-              iconUrl: 'icons/icon-48.png',
-              title: 'AutoMeet: Đã lưu video cuộc họp',
-              message: `Video ${request.filename} đã được tự động lưu vào thư mục Downloads/AutoMeet!`
-            });
+          if (chrome.runtime.lastError || !downloadId) {
+            console.warn('[AutoMeet Background] Lỗi download:', chrome.runtime.lastError);
+          } else {
+            console.log('[AutoMeet Background] File đã được tải xuống vào Downloads, id:', downloadId);
+            if (chrome.notifications) {
+              chrome.notifications.create({
+                type: 'basic',
+                iconUrl: 'icons/icon-48.png',
+                title: 'AutoMeet: Đã lưu video cuộc họp',
+                message: `Video ${request.filename} đã được lưu thẳng vào thư mục Downloads!`
+              });
+            }
           }
         });
       }
@@ -340,8 +377,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const tab = sender.tab || await findExistingMeetingTab(todayRoom);
       const settings = utils ? await utils.loadSettings() : null;
       const slot = utils ? utils.checkCurrentSlot(settings?.schedules, now) : null;
+      const sched = request.schedule || slot?.activeSchedule;
       if (tab) {
-        await startTabCaptureRecording(tab, slot?.activeSchedule, todayRoom);
+        await startTabCaptureRecording(tab, sched, todayRoom);
       }
       sendResponse({ success: true });
     } else if (request.action === 'STOP_TAB_CAPTURE') {
@@ -352,22 +390,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const settings = utils ? await utils.loadSettings() : null;
       const slot = utils ? utils.checkCurrentSlot(settings?.schedules, now) : null;
       await startTabCaptureRecording(tab, slot?.activeSchedule, todayRoom);
-
-      setTimeout(() => {
-        chrome.tabs.sendMessage(tab.id, { action: 'START_RECORDING' }, (res) => {
-          sendResponse({ success: true, detail: res });
-        });
-      }, 2000);
+      sendResponse({ success: true });
     } else if (request.action === 'TRIGGER_STOP_NOW') {
       await stopTabCaptureRecording();
-      const tab = await findExistingMeetingTab(todayRoom);
-      if (tab) {
-        chrome.tabs.sendMessage(tab.id, { action: 'STOP_RECORDING' }, (res) => {
-          sendResponse({ success: true, detail: res });
-        });
-      } else {
-        sendResponse({ success: true });
-      }
+      sendResponse({ success: true });
     } else if (request.action === 'GET_BACKGROUND_STATE') {
       const settings = utils ? await utils.loadSettings() : null;
       const slot = utils ? utils.checkCurrentSlot(settings?.schedules, now) : null;
@@ -382,6 +408,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         nextEvent: next,
         hasOpenTab: !!activeTab,
         isScheduleActive: isScheduleActive || isCapturingTab,
+        isRecording: isCapturingTab,
         settings: settings
       });
     }

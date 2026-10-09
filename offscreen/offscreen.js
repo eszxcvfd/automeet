@@ -1,6 +1,8 @@
 /**
  * AutoMeet - Offscreen Tab Audio/Video Recorder
- * Hoạt động ngầm 100% không yêu cầu người dùng xác nhận hay cấp quyền cửa sổ.
+ * Ghi lại toàn bộ màn hình và âm thanh thực tế của tab cuộc họp mà không yêu cầu
+ * người dùng bấm xác nhận hay cấp quyền (sử dụng quyền tabCapture của Extension).
+ * File WebM được lưu trực tiếp vào thư mục Downloads.
  */
 
 let mediaRecorder = null;
@@ -28,6 +30,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // async
   } else if (request.action === 'GET_OFFSCREEN_STATUS') {
     sendResponse({
+      alive: true,
       isRecording: mediaRecorder && mediaRecorder.state === 'recording',
       filename: currentFilename
     });
@@ -73,11 +76,14 @@ async function handleStartRecording(streamId, filename) {
       console.warn('[AutoMeet Offscreen] Không thể phát âm thanh ra loa:', e);
     }
 
-    // Chọn định dạng MIME tối ưu
+    // Chọn định dạng MIME tối ưu (hỗ trợ cả video VP9/VP8 và audio Opus)
     const mimeType = getOptimalMimeType();
     console.log(`[AutoMeet Offscreen] Sử dụng MIME Type: ${mimeType}`);
 
-    mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+    mediaRecorder = new MediaRecorder(mediaStream, {
+      mimeType,
+      videoBitsPerSecond: 2500000 // 2.5 Mbps cho video sắc nét
+    });
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -90,34 +96,14 @@ async function handleStartRecording(streamId, filename) {
       const blob = new Blob(recordedChunks, { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
 
-      // Thử tải qua chrome.downloads trực tiếp nếu có
-      if (chrome?.downloads?.download) {
-        chrome.downloads.download({
-          url: blobUrl,
-          filename: `AutoMeet/${currentFilename}`,
-          saveAs: false
-        }, (downloadId) => {
-          if (chrome.runtime.lastError) {
-            console.warn('[AutoMeet Offscreen] chrome.downloads gặp lỗi, fallback gửi về background:', chrome.runtime.lastError);
-            chrome.runtime.sendMessage({
-              action: 'SAVE_RECORDING_BLOB',
-              blobUrl: blobUrl,
-              filename: currentFilename
-            });
-          } else {
-            console.log('[AutoMeet Offscreen] File đã được tải xuống trực tiếp, id:', downloadId);
-          }
-        });
-      } else {
-        // Gửi blob URL về background để tải xuống
-        chrome.runtime.sendMessage({
-          action: 'SAVE_RECORDING_BLOB',
-          blobUrl: blobUrl,
-          filename: currentFilename
-        });
-      }
+      // Gửi blob URL về background để lưu thẳng vào Downloads
+      chrome.runtime.sendMessage({
+        action: 'SAVE_RECORDING_BLOB',
+        blobUrl: blobUrl,
+        filename: currentFilename
+      });
 
-      // Giữ stream và blob trong 20s trước khi giải phóng
+      // Giữ stream và blob trong 30s trước khi giải phóng
       setTimeout(() => {
         if (mediaStream) {
           mediaStream.getTracks().forEach((track) => track.stop());
@@ -127,7 +113,7 @@ async function handleStartRecording(streamId, filename) {
           audioCtx.close().catch(() => {});
           audioCtx = null;
         }
-      }, 20000);
+      }, 30000);
     };
 
     // Bắt đầu ghi hình (lấy chunk mỗi 1000ms)
