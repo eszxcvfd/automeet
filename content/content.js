@@ -13,6 +13,7 @@
   const utils = window.AutoMeetUtils;
   let currentSettings = utils ? utils.DEFAULT_SETTINGS : null;
   let isRecordingActive = false;
+  let recordingStartTime = null;
   let hudElement = null;
   let checkTimer = null;
   let currentActiveSlotId = null;
@@ -216,7 +217,13 @@
       return el.textContent && el.textContent.trim() === 'REC' && el.offsetParent !== null;
     });
 
-    isRecordingActive = !!recBadge || recTextElements.length > 0;
+    const isJitsiRecording = !!recBadge || recTextElements.length > 0;
+    if (isJitsiRecording) {
+      if (!isRecordingActive) {
+        recordingStartTime = recordingStartTime || Date.now();
+      }
+      isRecordingActive = true;
+    }
   }
 
   /**
@@ -230,6 +237,7 @@
 
   /**
    * Tự động kiểm tra và kích hoạt hoặc dừng record theo khung giờ lịch trình
+   * Đảm bảo chỉ kích hoạt đúng 1 lần cho mỗi ca, không bị vòng lặp spam thông báo.
    */
   async function checkSlotScheduleAutoRecord() {
     if (!currentSettings || !currentSettings.enableAutoRecord || !currentSettings.autoRecordIfInSlot) return;
@@ -250,26 +258,30 @@
 
     if (inSlot && activeSchedule) {
       // Đang trong khung giờ một ca làm việc
-      if (!isRecordingActive) {
-        console.log(`[AutoMeet] Đang trong ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt tự động Record...`);
+      // CHỈ KÍCH HOẠT ĐÚNG 1 LẦN CHO MỖI CA (Tránh lặp lại nhiều lần gây spam thông báo)
+      if (currentActiveSlotId !== activeSchedule.id && !isStartingRecording) {
+        console.log(`[AutoMeet] Bắt đầu ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), kích hoạt Record tự động...`);
+        currentActiveSlotId = activeSchedule.id;
         isStartingRecording = true;
-        showToast(`⏰ Đến ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}), tự động kích hoạt Record...`);
+        isRecordingActive = true;
+        if (!recordingStartTime) recordingStartTime = Date.now();
+        showToast(`⏰ Đến ${activeSchedule.name} (${activeSchedule.start} - ${activeSchedule.end}): Tự động kích hoạt Record...`);
+
         try {
           await triggerStartRecording();
-          if (isRecordingActive) {
-            currentActiveSlotId = activeSchedule.id;
-          }
         } catch (err) {
           console.warn('[AutoMeet] Lỗi khi tự động kích hoạt Record:', err);
         } finally {
           isStartingRecording = false;
+          isRecordingActive = true;
+          updateHUD();
         }
       }
     } else {
-      // Không nằm trong bất kỳ ca làm việc nào đang bật
-      if (isRecordingActive && currentActiveSlotId !== null) {
-        console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Record...`);
-        showToast(`⏰ Đã hết ca làm việc, tự động dừng Record...`);
+      // Không nằm trong bất kỳ ca làm việc nào đang bật -> Tự động dừng Record và lưu video
+      if (isRecordingActive || currentActiveSlotId !== null) {
+        console.log(`[AutoMeet] Đã kết thúc ca làm việc, tự động dừng Record và lưu file...`);
+        showToast(`⏰ Đã hết ca làm việc: Tự động dừng Record và lưu video...`);
         isStoppingRecording = true;
         try {
           await triggerStopRecording();
@@ -277,10 +289,11 @@
           console.warn('[AutoMeet] Lỗi khi tự động dừng Record:', err);
         } finally {
           isStoppingRecording = false;
+          isRecordingActive = false;
           currentActiveSlotId = null;
+          recordingStartTime = null;
+          updateHUD();
         }
-      } else if (!isRecordingActive) {
-        currentActiveSlotId = null;
       }
     }
   }
@@ -309,42 +322,25 @@
   }
 
   /**
-   * Giả lập thao tác click chuột đầy đủ (pointerdown -> mousedown -> pointerup -> mouseup -> click)
-   * Giúp tương thích 100% với cơ chế Event Delegation của React 18 / Jitsi Meet
+   * Giả lập thao tác click chuột chuẩn HTML5 (tránh double click vào SVG/Div làm toggle menu bị đóng ngay)
    */
   function simulateUserClick(element) {
     if (!element) return false;
     try {
-      element.scrollIntoView({ block: 'center', inline: 'center' });
-      element.focus();
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (typeof element.focus === 'function') element.focus();
 
-      const rect = element.getBoundingClientRect();
-      const clientX = rect.left + rect.width / 2;
-      const clientY = rect.top + rect.height / 2;
-
-      const eventInit = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        detail: 1,
-        clientX: clientX,
-        clientY: clientY,
-        button: 0,
-        buttons: 1
-      };
-
-      const target = element.querySelector('svg, .toolbox-icon') || element;
-      target.dispatchEvent(new PointerEvent('pointerdown', eventInit));
-      target.dispatchEvent(new MouseEvent('mousedown', eventInit));
-      target.dispatchEvent(new PointerEvent('pointerup', eventInit));
-      target.dispatchEvent(new MouseEvent('mouseup', eventInit));
-      target.dispatchEvent(new MouseEvent('click', eventInit));
+      // Sử dụng element.click() trực tiếp
       if (typeof element.click === 'function') {
         element.click();
+        return true;
       }
+
+      // Fallback
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
       return true;
     } catch (e) {
-      if (typeof element.click === 'function') element.click();
+      try { element.click(); } catch(err) {}
       return true;
     }
   }
@@ -359,8 +355,8 @@
     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
     const testid = (el.getAttribute('data-testid') || '').toLowerCase();
 
-    // Loại trừ các nút khác trong cuộc họp
-    const excludePatterns = ['leave', 'rời', 'hangup', 'camera', 'micro', 'audio', 'video', 'chat', 'raise hand', 'giơ tay', 'participant', 'người tham gia', 'tile view', 'dạng lưới'];
+    // Loại trừ các nút khác trong cuộc họp (bao gồm cả reaction/phản ứng)
+    const excludePatterns = ['leave', 'rời', 'hangup', 'camera', 'micro', 'audio', 'video', 'chat', 'raise hand', 'giơ tay', 'participant', 'người tham gia', 'tile view', 'dạng lưới', 'reaction', 'phản ứng'];
     for (const p of excludePatterns) {
       if (aria.includes(p) || testid.includes(p)) return false;
     }
@@ -375,7 +371,20 @@
   function findMoreActionsButton() {
     wakeUpToolbar();
 
-    // 1. Tìm theo data-testid chính xác của Jitsi
+    // 1. Tìm theo aria-label chính xác "More actions" (chưa mở menu)
+    const buttons = Array.from(document.querySelectorAll(
+      '.new-toolbox [role="button"], #new-toolbox [role="button"], .toolbox-content [role="button"], .toolbox-button, button'
+    ));
+
+    for (const btn of buttons) {
+      if (!isValidMoreActionsButton(btn)) continue;
+      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if ((aria === 'more actions' || aria.includes('more actions') || aria.includes('thao tác khác') || aria.includes('thêm hành động')) && !aria.includes('close') && !aria.includes('đóng')) {
+        return btn;
+      }
+    }
+
+    // 2. Tìm theo data-testid chính xác của Jitsi
     const testidSelectors = [
       '[data-testid="toolbar/overflow-menu"]',
       '[data-testid="overflow-menu-button"]',
@@ -388,13 +397,11 @@
       if (isValidMoreActionsButton(el)) return el;
     }
 
-    // 2. Tìm theo SVG có 3 circles hoặc vector path 3 chấm
-    const allButtons = Array.from(document.querySelectorAll(
-      '.new-toolbox [role="button"], #new-toolbox [role="button"], .toolbox-content [role="button"], .toolbox-button, button'
-    ));
-
-    for (const btn of allButtons) {
+    // 3. Tìm theo SVG có 3 circles hoặc vector path 3 chấm
+    for (const btn of buttons) {
       if (!isValidMoreActionsButton(btn)) continue;
+      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (aria.includes('close') || aria.includes('đóng') || aria.includes('reaction')) continue;
 
       // Kiểm tra SVG có 3 circles (dấu 3 chấm ngang như trong screenshot)
       const circles = btn.querySelectorAll('svg circle');
@@ -412,11 +419,10 @@
       }
     }
 
-    // 3. Tìm theo các nhãn aria-label hỗ trợ cả tiếng Anh và tiếng Việt
+    // 4. Tìm theo các nhãn aria-label hỗ trợ cả tiếng Anh và tiếng Việt
     const ariaSelectors = [
       '[aria-label="More actions"]',
       '[aria-label*="More actions" i]',
-      '[aria-label*="Close more actions" i]',
       '[aria-label*="Thêm hành động" i]',
       '[aria-label*="Thao tác khác" i]',
       '[aria-label*="Tùy chọn khác" i]',
@@ -454,9 +460,13 @@
    * Kiểm tra menu More actions có đang mở trên màn hình không
    */
   function isMoreActionsMenuOpen() {
-    const moreBtn = findMoreActionsButton();
-    const aria = (moreBtn?.getAttribute('aria-label') || '').toLowerCase();
-    if (aria.includes('close') || aria.includes('đóng')) return true;
+    const menuEl = document.getElementById('overflow-context-menu') ||
+                   document.querySelector('.css-pg8rw8-contextMenu-contextMenu, [role="menu"]');
+    if (menuEl && menuEl.offsetParent !== null) return true;
+
+    const closeBtn = document.querySelector('[aria-label*="Close more actions" i], [aria-label*="Đóng thao tác khác" i]');
+    if (closeBtn && closeBtn.offsetParent !== null) return true;
+
     return !!findRecordMenuItem();
   }
 
@@ -526,11 +536,6 @@
    * Kích hoạt Record (Tự động hoặc thủ công)
    */
   async function triggerStartRecording() {
-    if (isRecordingActive) {
-      showToast('ℹ Cuộc họp đang được Record rồi.');
-      return;
-    }
-
     // 1. Kiểm tra nếu đang ở màn hình chờ Pre-join, tự động bấm Tham gia
     if (isPrejoinScreen()) {
       showToast('⏳ Đang ở màn hình chờ (Pre-join). Tự động điền tên và tham gia...');
@@ -551,45 +556,50 @@
       }
     } catch (e) {}
 
-    // 3. Kiểm tra nếu modal Record đã mở sẵn trên màn hình
+    isRecordingActive = true;
+    if (!recordingStartTime) {
+      recordingStartTime = Date.now();
+    }
+    updateHUD();
+
+    // 4. Kiểm tra nếu modal Record đã mở sẵn trên màn hình
     let startBtn = findStartRecordingButton();
     if (startBtn) {
       await autoConfirmStartRecording(startBtn);
       return;
     }
 
-    showToast('⏳ Đang tìm nút 3 chấm và bật Record...');
-
-    // Bước 1: Mở menu 3 chấm More actions (nếu chưa mở)
-    let recordItem = findRecordMenuItem();
-    if (!recordItem) {
+    // 5. Mở menu 3 chấm More actions (nếu chưa mở)
+    if (!isMoreActionsMenuOpen()) {
       wakeUpToolbar();
       let moreBtn = null;
-      for (let attempt = 0; attempt < 8; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         moreBtn = findMoreActionsButton();
         if (moreBtn) break;
-        await sleep(350);
+        await sleep(300);
       }
 
       if (moreBtn) {
         console.log('[AutoMeet] Đang click nút 3 chấm More actions...', moreBtn);
         simulateUserClick(moreBtn);
-
-        // Chờ menu xuất hiện (tối đa 2.5s)
-        for (let attempt = 0; attempt < 10; attempt++) {
-          await sleep(250);
-          recordItem = findRecordMenuItem();
-          if (recordItem) break;
-        }
+        await sleep(400);
       }
+    }
+
+    // 6. Tìm mục Record trong menu
+    let recordItem = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      recordItem = findRecordMenuItem();
+      if (recordItem) break;
+      await sleep(250);
     }
 
     if (recordItem) {
       console.log('[AutoMeet] Đang click mục Record trong menu...', recordItem);
       simulateUserClick(recordItem);
 
-      // Bước 2: Chờ modal Record xuất hiện và tự động bấm nút Start (tối đa 4s)
-      for (let attempt = 0; attempt < 16; attempt++) {
+      // Chờ modal Record xuất hiện và tự động bấm nút Start (tối đa 3.5s)
+      for (let attempt = 0; attempt < 14; attempt++) {
         await sleep(250);
         startBtn = findStartRecordingButton();
         if (startBtn) break;
@@ -601,12 +611,11 @@
       }
     }
 
-    // Nếu Jitsi chưa mở được UI Record (hoặc server tắt UI Record):
     // TabCapture nền (Engine 2) của AutoMeet đã được kích hoạt và đang ghi âm/hình!
     isRecordingActive = true;
     updateHUD();
     playNotificationSound();
-    showToast('🎥 TỰ ĐỘNG GHI HÌNH ĐÃ KÍCH HOẠT (TabCapture Engine)! Video sẽ tự động lưu khi hết ca.');
+    showToast('🎥 AUTO-RECORD ĐÃ KÍCH HOẠT! Video sẽ tự động lưu vào máy khi hết ca.');
   }
 
   /**
@@ -632,10 +641,9 @@
 
     // 2. Click nút Start
     simulateUserClick(startBtn);
-    startBtn.click();
 
     // 3. Tự động kiểm tra và bấm xác nhận các hộp thoại phát sinh tiếp theo
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) {
       await sleep(350);
       const confirmNext = Array.from(document.querySelectorAll('[role="dialog"] button, div[aria-modal="true"] button')).find(b => {
         if (b.closest('#automeet-hud-container, .automeet-toast')) return false;
@@ -646,11 +654,18 @@
       if (confirmNext) {
         console.log('[AutoMeet] Tự động bấm xác nhận tiếp theo:', confirmNext.textContent);
         simulateUserClick(confirmNext);
-        confirmNext.click();
         break;
       }
     }
 
+    // 4. Tự động ẩn popup từ chối lưu cloud của Jitsi (vì đã có TabCapture lưu video máy tính)
+    setTimeout(() => {
+      autoDismissPopups();
+    }, 1200);
+
+    isRecordingActive = true;
+    if (!recordingStartTime) recordingStartTime = Date.now();
+    updateHUD();
     playNotificationSound();
     showToast('🎥 ĐÃ TỰ ĐỘNG BẬT VÀ XÁC NHẬN RECORD THÀNH CÔNG!');
   }
@@ -802,9 +817,11 @@
 
   function finishStopRecording() {
     isRecordingActive = false;
+    currentActiveSlotId = null;
+    recordingStartTime = null;
     updateHUD();
     playNotificationSound();
-    showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads).');
+    showToast('⏹ ĐÃ DỪNG RECORD! Video đang được lưu về máy (Downloads/AutoMeet).');
   }
 
   /**
@@ -914,8 +931,18 @@
         statusPill.className = 'automeet-status-pill recording';
       }
       if (statusText) {
-        statusText.textContent = inSlot ? `Đang Record (${activeSchedule?.name})` : 'Đang Record';
+        let timerStr = '';
+        if (recordingStartTime) {
+          const elapsedSec = Math.floor((Date.now() - recordingStartTime) / 1000);
+          const m = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+          const s = String(elapsedSec % 60).padStart(2, '0');
+          timerStr = ` [${m}:${s}]`;
+        }
+        statusText.textContent = inSlot 
+          ? `🔴 ĐANG GHI HÌNH${timerStr} (${activeSchedule?.name})` 
+          : `🔴 ĐANG GHI HÌNH${timerStr}`;
       }
+    }
     } else if (isPrejoinScreen()) {
       if (statusPill) {
         statusPill.className = 'automeet-status-pill waiting';
