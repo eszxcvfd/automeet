@@ -373,10 +373,11 @@
         Khi Jitsi Meet kích hoạt ghi hình cục bộ (Local Recording), trình duyệt Chrome theo chính sách bảo mật sẽ hiển thị hộp thoại: <em>"Allow meet.jit.si to see this tab?"</em> (như ảnh 2 bạn đã gửi).
       </p>
       <div class="callout" style="background: rgba(16, 185, 129, 0.1); border-left-color: #10b981; color: #a7f3d0;">
-        <strong>Giải pháp 1-Click tự động hóa hoàn toàn:</strong><br>
-        Bạn chỉ cần khởi chạy Chrome bằng phím tắt / lệnh có kèm 2 cờ bảo mật sau:<br>
-        <code>google-chrome --auto-select-desktop-capture-source="Jitsi Meet" --use-fake-ui-for-media-stream</code><br><br>
-        Khi chạy cờ này, Chrome sẽ <strong>tự động chọn tab Jitsi và tự động bấm Allow ngay lập tức</strong> mà không cần người trực máy! File script chạy sẵn được đính kèm trong thư mục <code>scripts/</code> của Extension.
+        <strong>Giải pháp 1-Click tự động hóa hoàn toàn trên Windows & Linux:</strong><br>
+        Chỉ cần chạy script khởi chạy hoặc tạo Shortcut Desktop tự động có sẵn trong thư mục <code>scripts/</code>:<br>
+        • <strong>Windows:</strong> Chạy <code>scripts/start-chrome-auto.bat</code> hoặc <code>scripts/create-windows-shortcut.bat</code><br>
+        • <strong>Linux:</strong> Chạy <code>scripts/start-chrome-auto.sh</code> hoặc <code>scripts/create-linux-shortcut.sh</code><br><br>
+        Các script này cung cấp các cờ <code>--auto-select-tab-capture-source-by-title</code> và <code>--auto-select-desktop-capture-source</code> để Chrome/Edge tự động chọn tab cuộc họp và tự động cấp quyền mà không làm giả micro hay webcam thật!
       </div>
     </div>
 
